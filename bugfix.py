@@ -238,11 +238,17 @@ megatron.model.module.float16_to_fp32 = float16_to_fp32
 
 # INPLACE.7: MixedFusedLayerNorm
 from megatron.model.fused_layer_norm import MixedFusedLayerNorm
-
+import numbers
 
 class MixedFusedLayerNorm(torch.nn.LayerNorm):
     def __init__(self, normalized_shape, eps=1e-5, no_persist_layer_norm=True, sequence_parallel=False):
         super(MixedFusedLayerNorm, self).__init__(normalized_shape, eps, no_persist_layer_norm)
+
+        if isinstance(normalized_shape, numbers.Integral):
+            normalized_shape = (normalized_shape,)
+
+        self.weight = Parameter(torch.Tensor(*normalized_shape))
+        self.bias = Parameter(torch.Tensor(*normalized_shape))
 
         # set sequence parallelism flag on weight and bias parameters
         self.sequence_parallel = sequence_parallel
@@ -797,3 +803,19 @@ def forward(self, hidden_states, attention_mask,
 
 
 ParallelTransformerLayer.forward = forward
+
+from megatron import initialize
+from megatron.initialize import _warmup_jit_function
+
+def set_jit_fusion_options():
+    """Set PyTorch JIT layer fusion options."""
+
+    # legacy pytorch fuser
+    torch._C._jit_set_profiling_mode(False)
+    torch._C._jit_set_profiling_executor(False)
+    torch._C._jit_override_can_fuse_on_cpu(True)
+    torch._C._jit_override_can_fuse_on_gpu(True)
+
+    _warmup_jit_function()
+
+initialize.set_jit_fusion_options = set_jit_fusion_options
