@@ -324,7 +324,9 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
         self.softmax_in_fp32 = softmax_in_fp32
         self.scale = scale
         self.mask_tri = None
-
+        p = torch.npu.get_device_properties(0) if torch.npu.is_available() else None
+        self.fused = p.name in ['Ascend910A', 'Ascend910ProB'] if p is not None else False
+        
         assert (
                 self.scale is None or softmax_in_fp32
         ), "softmax should be in fp32 when scaled"
@@ -333,7 +335,7 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
         # [b, np, sq, sk]
         assert input.dim() == 4
 
-        if torch.npu.is_available():
+        if torch.npu.is_available() and self.fused:
             return self.forward_fused_softmax(input, mask)
 
         return self.forward_torch_softmax(input, mask)
