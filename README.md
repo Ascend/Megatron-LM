@@ -59,6 +59,8 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
   ```
   cd Megatron-LM
   git clone https://github.com/NVIDIA/Megatron-LM.git
+  # 进入github上拉下来的Megatron-LM
+  cd ./Megatron-LM
   git checkout 0bb597b42c53355a567aba2a1357cc34b9d99ddd
   cd -
   ```
