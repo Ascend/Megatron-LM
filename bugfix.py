@@ -24,19 +24,6 @@ from megatron.schedules import custom_backward, dummy_handler, forward_step, get
 from megatron.initialize import _warmup_jit_function
 
 
-_grad_accum_fusion_available = True
-try:
-    import fused_weight_gradient_mlp_cuda
-except ImportError:
-    _grad_accum_fusion_available = False
-
-try:
-    from apex.contrib.layer_norm.layer_norm import FastLayerNormFN
-    HAVE_PERSIST_LAYER_NORM = True
-except:
-    HAVE_PERSIST_LAYER_NORM = False
-
-
 def wrapper_type(fn):
     @wraps(fn)
     def decorated(*args, **kwargs):
@@ -254,17 +241,6 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
 
 def MixedFusedLayerNormInit(self, normalized_shape, eps=1e-5, no_persist_layer_norm=True, sequence_parallel=False):
     super(MixedFusedLayerNorm, self).__init__()
-
-    # List of hiddens sizes supported in the persistent layer norm kernel
-    # If the hidden size is not supported, fall back to the non-persistent
-    # kernel.
-    persist_ln_hidden_sizes = [1024, 1536, 2048, 2304, 3072, 3840, 4096,
-                               5120, 6144, 8192, 10240, 12288, 12800, 15360, 16384, 18432, 20480,
-                               24576, 25600, 30720, 32768, 40960, 49152, 65536]
-    if normalized_shape not in persist_ln_hidden_sizes or \
-            not HAVE_PERSIST_LAYER_NORM:
-        no_persist_layer_norm = True
-
     if isinstance(normalized_shape, numbers.Integral):
         normalized_shape = (normalized_shape,)
     self.normalized_shape = torch.Size(normalized_shape)
@@ -272,7 +248,7 @@ def MixedFusedLayerNormInit(self, normalized_shape, eps=1e-5, no_persist_layer_n
     self.weight = torch.nn.parameter.Parameter(torch.Tensor(*normalized_shape))
     self.bias = torch.nn.parameter.Parameter(torch.Tensor(*normalized_shape))
     self.reset_parameters()
-    self.no_persist_layer_norm = no_persist_layer_norm
+    self.no_persist_layer_norm = True
     self.sequence_parallel = sequence_parallel
 
     # set sequence parallelism flag on weight and bias parameters
@@ -363,11 +339,13 @@ def _compile_dependencies():
 
 
 def clear_npu_overflow_flag():
+    # TODO: async operation and 1980B compatible adaptation
     float_status = torch.zeros(8).npu()
     result = torch.npu_clear_float_status(float_status)
 
 
 def get_npu_overflow_flag():
+    # TODO: async operation and 1980B compatible adaptation
     float_status = torch.zeros(8).npu()
     result = torch.npu_get_float_status(float_status)
     if float_status.cpu()[0] != 0:
@@ -377,6 +355,7 @@ def get_npu_overflow_flag():
 
 
 def set_npu_overflow_flag():
+    # TODO: async operation and 1980B compatible adaptation
     torch.tensor([65504]).half().npu() + 100
 
 
