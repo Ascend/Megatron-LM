@@ -66,16 +66,6 @@ def wrapper_dist(fn):
     return wrapper
 
 
-def _compile_dependencies():
-    if torch.distributed.get_rank() == 0:
-        start_time = time.time()
-        print('> compiling dataset index builder ...')
-        from megatron.data.dataset_utils import compile_helper
-        compile_helper()
-        print('>>> done with dataset index builder. Compilation time: {:.3f} '
-              'seconds'.format(time.time() - start_time), flush=True)
-
-
 def fp32_to_float16(val, float16_convertor):
     def half_conversion(val):
         val_typecheck = val
