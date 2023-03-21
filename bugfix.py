@@ -1,22 +1,29 @@
+import copy
+import math
+import os
 import sys
 import time
-import math
-import copy
 import numpy as np
+import numbers
 import torch
 import torch_npu
+import apex
+import megatron
+
 from functools import wraps
+from torch import _C
+from torch_npu.npu import _lazy_call, device as device_ctx_manager
+from megatron import print_rank_0, get_args
+from megatron.core import mpu
+from megatron.data.gpt_dataset import _num_tokens, _num_epochs, _build_shuffle_idx, _build_doc_idx
+from megatron.model import ModelType
+from megatron.model.module import conversion_helper
+from megatron.model.fused_layer_norm import MixedFusedLayerNorm, HAVE_PERSIST_LAYER_NORM
+from megatron.core.utils import make_viewless_tensor
+from megatron.schedules import custom_backward, dummy_handler, forward_step, get_num_microbatches
+from megatron.initialize import _warmup_jit_function
 
-# ======================
-# torch
-# ======================
 
-# INPLACE.1: torch.cuda.get_rng_state
-torch.cuda.get_rng_state = torch.get_rng_state
-torch.cuda.set_rng_state = torch.set_rng_state
-
-
-# INPLACE.2: torch.Tensor.type()
 def wrapper_type(fn):
     @wraps(fn)
     def decorated(*args, **kwargs):
@@ -31,13 +38,8 @@ def wrapper_type(fn):
     return decorated
 
 
-torch.Tensor.type = wrapper_type(torch.Tensor.type)
-
-# INPLACE.3: torch.ditributed.xx input long --> int
-from torch import distributed as dist
-
-
-def wrapper_dist_long2int(fn):
+# deprecated
+def wrapper_dist(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if args[0].dtype == torch.long and not kwargs.get('async_op', False):
@@ -51,166 +53,10 @@ def wrapper_dist_long2int(fn):
     return wrapper
 
 
-dist.all_reduce = wrapper_dist_long2int(dist.all_reduce)
-dist.broadcast = wrapper_dist_long2int(dist.broadcast)
-dist.send = wrapper_dist_long2int(dist.send)
-dist.recv = wrapper_dist_long2int(dist.recv)
-
-# ======================
-# apex
-# ======================
-
-# INPLACE.4: apex.optimizers
-import apex
-
-
-class AdamW(torch.optim.Optimizer):
-    r"""Implements AdamW algorithm.
-
-    The original Adam algorithm was proposed in `Adam: A Method for Stochastic Optimization`_.
-    The AdamW variant was proposed in `Decoupled Weight Decay Regularization`_.
-
-    Arguments:
-        params (iterable): iterable of parameters to optimize or dicts defining
-            parameter groups
-        lr (float, optional): learning rate (default: 1e-3)
-        betas (Tuple[float, float], optional): coefficients used for computing
-            running averages of gradient and its square (default: (0.9, 0.999))
-        eps (float, optional): term added to the denominator to improve
-            numerical stability (default: 1e-8)
-        weight_decay (float, optional): weight decay coefficient (default: 1e-2)
-        amsgrad (boolean, optional): whether to use the AMSGrad variant of this
-            algorithm from the paper `On the Convergence of Adam and Beyond`_
-            (default: False)
-
-    .. _Adam\: A Method for Stochastic Optimization:
-        https://arxiv.org/abs/1412.6980
-    .. _Decoupled Weight Decay Regularization:
-        https://arxiv.org/abs/1711.05101
-    .. _On the Convergence of Adam and Beyond:
-        https://openreview.net/forum?id=ryQu7f-RZ
-    """
-
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=1e-2, amsgrad=False):
-        if not 0.0 <= lr:
-            raise ValueError("Invalid learning rate: {}".format(lr))
-        if not 0.0 <= eps:
-            raise ValueError("Invalid epsilon value: {}".format(eps))
-        if not 0.0 <= betas[0] < 1.0:
-            raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
-        if not 0.0 <= betas[1] < 1.0:
-            raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
-        defaults = dict(lr=lr, betas=betas, eps=eps,
-                        weight_decay=weight_decay, amsgrad=amsgrad)
-        super(AdamW, self).__init__(params, defaults)
-
-    def __setstate__(self, state):
-        super(AdamW, self).__setstate__(state)
-        for group in self.param_groups:
-            group.setdefault('amsgrad', False)
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        """Performs a single optimization step.
-
-        Arguments:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
-        """
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-
-                # Perform stepweight decay
-                p.data.mul_(1 - group['lr'] * group['weight_decay'])
-
-                # Perform optimization step
-                grad = p.grad
-                if grad.is_sparse:
-                    raise RuntimeError('Adam does not support sparse gradients, please consider SparseAdam instead')
-                amsgrad = group['amsgrad']
-
-                state = self.state[p]
-
-                # State initialization
-                if len(state) == 0:
-                    state['step'] = 0
-                    # Exponential moving average of gradient values
-                    state['exp_avg'] = torch.zeros_like(p)
-                    # Exponential moving average of squared gradient values
-                    state['exp_avg_sq'] = torch.zeros_like(p)
-                    if amsgrad:
-                        # Maintains max of all exp. moving avg. of sq. grad. values
-                        state['max_exp_avg_sq'] = torch.zeros_like(p)
-
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-                if amsgrad:
-                    max_exp_avg_sq = state['max_exp_avg_sq']
-                beta1, beta2 = group['betas']
-
-                state['step'] += 1
-                bias_correction1 = 1 - beta1 ** state['step']
-                bias_correction2 = 1 - beta2 ** state['step']
-
-                # Decay the first and second moment running average coefficient
-                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-                if amsgrad:
-                    # Maintains the maximum of all 2nd moment running avg. till now
-                    torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
-                    # Use the max. for normalizing running avg. of gradient
-                    denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
-                else:
-                    denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
-
-                step_size = group['lr'] / bias_correction1
-
-                p.addcdiv_(exp_avg, denom, value=-step_size)
-
-        return loss
-
-
-apex.optimizers.FusedAdam = AdamW
-apex.optimizers.FusedSGD = torch.optim.SGD
-
-# ======================
-# megatron
-# ======================
-import megatron
-
-
-# INPLACE.5: megatron.initialize._compile_dependencies
-def _compile_dependencies():
-    if torch.distributed.get_rank() == 0:
-        start_time = time.time()
-        print('> compiling dataset index builder ...')
-        from megatron.data.dataset_utils import compile_helper
-        compile_helper()
-        print('>>> done with dataset index builder. Compilation time: {:.3f} '
-              'seconds'.format(time.time() - start_time), flush=True)
-
-
-megatron.initialize._compile_dependencies = _compile_dependencies
-
-# INPLACE.6: fp32_to_float16, float16_to_fp32
-from torch.autograd import Variable
-from torch.nn.parameter import Parameter
-from megatron.model.module import fp32_to_float16, float16_to_fp32, conversion_helper
-
-
 def fp32_to_float16(val, float16_convertor):
-    """Convert fp32 `val` to fp16/bf16"""
-
     def half_conversion(val):
         val_typecheck = val
-        if isinstance(val_typecheck, (Parameter, Variable)):
+        if isinstance(val_typecheck, (torch.nn.parameter.Parameter, torch.autograd.Variable)):
             val_typecheck = val.data
         if val_typecheck.dtype == torch.float32:
             val = float16_convertor(val)
@@ -220,11 +66,9 @@ def fp32_to_float16(val, float16_convertor):
 
 
 def float16_to_fp32(val):
-    """Convert fp16/bf16 `val` to fp32"""
-
     def float_conversion(val):
         val_typecheck = val
-        if isinstance(val_typecheck, (Parameter, Variable)):
+        if isinstance(val_typecheck, (torch.nn.parameter.Parameter, torch.autograd.Variable)):
             val_typecheck = val.data
         if val_typecheck.dtype in [torch.float16, torch.bfloat16]:
             val = val.float()
@@ -233,193 +77,209 @@ def float16_to_fp32(val):
     return conversion_helper(val, float_conversion)
 
 
-megatron.model.module.fp32_to_float16 = fp32_to_float16
-megatron.model.module.float16_to_fp32 = float16_to_fp32
+# deprecated
+def _set_cuda_rng_state(new_state, device=-1):
+    if hasattr(_C, '_cuda_setRNGState') and callable(_C._cuda_setRNGState):
+        # older PyTorch
+        def cb():
+            with device_ctx_manager(device):
+                _C._cuda_setRNGState(new_state)
+    else:
+        # newer PyTorch
+        if device == -1:
+            device = torch.device('cuda')
+        elif isinstance(device, str):
+            device = torch.device(device)
+        elif isinstance(device, int):
+            device = torch.device('cuda', device)
 
-# INPLACE.7: MixedFusedLayerNorm
-from megatron.model.fused_layer_norm import MixedFusedLayerNorm
-import numbers
+        def cb():
+            idx = device.index
+            if idx is None:
+                idx = torch.cuda.current_device()
+            default_generator = torch.npu.default_generators[idx]
+            default_generator.set_state(new_state)
 
-class MixedFusedLayerNorm(torch.nn.LayerNorm):
-    def __init__(self, normalized_shape, eps=1e-5, no_persist_layer_norm=True, sequence_parallel=False):
-        super(MixedFusedLayerNorm, self).__init__(normalized_shape, eps, no_persist_layer_norm)
-
-        if isinstance(normalized_shape, numbers.Integral):
-            normalized_shape = (normalized_shape,)
-
-        self.weight = Parameter(torch.Tensor(*normalized_shape))
-        self.bias = Parameter(torch.Tensor(*normalized_shape))
-
-        # set sequence parallelism flag on weight and bias parameters
-        self.sequence_parallel = sequence_parallel
-        setattr(self.weight, 'sequence_parallel', self.sequence_parallel)
-        setattr(self.bias, 'sequence_parallel', self.sequence_parallel)
-
-
-for k in sys.modules:
-    if k.startswith('megatron.model'):
-        for target in ['LayerNorm', 'MixedFusedLayerNorm']:
-            if getattr(sys.modules[k], target, None):
-                setattr(sys.modules[k], target, MixedFusedLayerNorm)
-
-# INPLACE.8: _unscale_main_grads_and_check_for_nan
-from megatron.optimizer import Float16OptimizerWithFloat16Params
+    _lazy_call(cb)
 
 
-def _unscale_main_grads_and_check_for_nan(self):
-    # Collect main grads.
-    main_grads = self._collect_main_grad_data_for_unscaling()
-
-    # Reset found inf.
-    self.found_inf.fill_(0.0)
-
-    # Unscale and set found inf/nan
-    torch._amp_foreach_non_finite_check_and_unscale_(
-        main_grads, self.found_inf, self.grad_scaler.inv_scale)
-
-    # Update across all model parallel instances.
-    torch.distributed.all_reduce(self.found_inf,
-                                 op=torch.distributed.ReduceOp.MAX,
-                                 group=self.get_model_parallel_group())
-
-    # add data_parallel synchronize
-    torch.distributed.all_reduce(self.found_inf,
-                                 op=torch.distributed.ReduceOp.MAX,
-                                 group=self.get_data_parallel_group())
-
-    # Check for nan.
-    found_inf_flag = (self.found_inf.item() > 0)
-
-    return found_inf_flag
-
-
-Float16OptimizerWithFloat16Params._unscale_main_grads_and_check_for_nan = _unscale_main_grads_and_check_for_nan
-
-# INPLACE.9: FusedScaleMaskSoftmax
-from megatron.model.fused_softmax import FusedScaleMaskSoftmax
-from megatron.model.enums import AttnMaskType
-
-
-class FusedScaleMaskSoftmax(torch.nn.Module):
-    def __init__(
-            self,
-            input_in_fp16,
-            input_in_bf16,
-            attn_mask_type,
-            scaled_masked_softmax_fusion,
-            mask_func,
-            softmax_in_fp32,
-            scale,
-    ):
-        super(FusedScaleMaskSoftmax, self).__init__()
-        self.input_in_fp16 = input_in_fp16
-        self.input_in_bf16 = input_in_bf16
-        assert not (
-                self.input_in_fp16 and self.input_in_bf16
-        ), "both fp16 and bf16 flags cannot be active at the same time."
-        self.input_in_float16 = self.input_in_fp16 or self.input_in_bf16
-        self.attn_mask_type = attn_mask_type
-        self.scaled_masked_softmax_fusion = scaled_masked_softmax_fusion
-        self.mask_func = mask_func
-        self.softmax_in_fp32 = softmax_in_fp32
-        self.scale = scale
-        self.mask_tri = None
-        p = torch.npu.get_device_properties(0) if torch.npu.is_available() else None
-        self.fused = p.name in ['Ascend910A', 'Ascend910ProB'] if p is not None else False
-        
-        assert (
-                self.scale is None or softmax_in_fp32
-        ), "softmax should be in fp32 when scaled"
-
-    def forward(self, input, mask):
-        # [b, np, sq, sk]
-        assert input.dim() == 4
-
-        if torch.npu.is_available() and self.fused:
-            return self.forward_fused_softmax(input, mask)
-
-        return self.forward_torch_softmax(input, mask)
-
-    def forward_fused_softmax(self, input, mask):
-        if self.softmax_in_fp32:
-            input = input.float()
-
-        if self.scale is None:
-            self.scale = 1.0
-
-        if self.attn_mask_type == AttnMaskType.causal:
-            if self.mask_tri is None:
-                self.mask_tri = torch.triu(torch.ones(input.shape, device=input.device), diagonal=1).bool()
-            probs = torch.npu_scaled_masked_softmax(input, self.mask_tri, self.scale, False)
-        else:
-            probs = torch.npu_scaled_masked_softmax(input, mask, self.scale, False)
-
-        probs = probs.half()
-
-        return probs
-
-    def forward_torch_softmax(self, input, mask):
-        if self.input_in_float16 and self.softmax_in_fp32:
-            input = input.float()
-
-        if self.scale is not None:
-            input = input * self.scale
-
-        if self.attn_mask_type == AttnMaskType.causal:
-            mask_tri = torch.triu(torch.ones(input.shape, device=input.device), diagonal=1).bool()
-            mask_output = self.mask_func(input, mask_tri)
-        else:
-            mask_output = self.mask_func(input, mask) if mask is not None else input
-        probs = torch.nn.Softmax(dim=-1)(mask_output)
-
-        if self.input_in_float16 and self.softmax_in_fp32:
-            if self.input_in_fp16:
-                probs = probs.half()
-            else:
-                probs = probs.bfloat16()
-
-        return probs
-
-
-for k in sys.modules:
-    if k.startswith('megatron.model'):
-        for target in ['FusedScaleMaskSoftmax']:
-            if getattr(sys.modules[k], target, None):
-                setattr(sys.modules[k], target, FusedScaleMaskSoftmax)
-
-# INPLACE.10: clip_grad_norm_fp32
-from torch._six import inf
-from megatron import mpu
-from megatron.model.module import param_is_not_shared
-from megatron.mpu.layers import param_is_not_tensor_parallel_duplicate
-from megatron.optimizer.clip_grads import clip_grad_norm_fp32
-
-
-def clip_grad_norm_fp32(parameters, grads_for_norm,
-                        max_norm, norm_type=2,
-                        model_parallel_group=None):
-    """Clips gradient norm of an iterable of parameters whose gradients
-       are in fp32.
-
-    This is adapted from torch.nn.utils.clip_grad.clip_grad_norm_ and
-    added functionality to handle model parallel parameters. Note that
-    the gradients are modified in place.
-
-    Arguments:
-        parameters (Iterable[Tensor] or Tensor): an iterable of Tensors or a
-            single Tensor that will have gradients normalized
-        grads_for_norm (Iterable[Tensor]): an iterable of Tensors or a single
-            Tensor that will be used for calculating the grad norm.
-        max_norm (float or int): max norm of the gradients
-        norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for
-            infinity norm.
-        model_parallel_group (group): given the nature of the distributed
-            optimizer, this is passed as an argument.
-
-    Returns:
-        Total norm of the parameters (viewed as a single vector).
+def _build_index_mappings(name, data_prefix, documents, sizes,
+                          num_samples, seq_length, seed):
+    """Build doc-idx, sample-idx, and shuffle-idx.
+    doc-idx: is an array (ordered) of documents to be used in training.
+    sample-idx: is the start document index and document offset for each
+       training sample.
+    shuffle-idx: maps the sample index into a random index into sample-idx.
     """
+    # Number of tokens in each epoch and number of required epochs.
+    tokens_per_epoch = _num_tokens(documents, sizes)
+    num_epochs = _num_epochs(tokens_per_epoch, seq_length, num_samples)
+    # rng state
+    np_rng = np.random.RandomState(seed=seed)
 
+    # Filename of the index mappings.
+    _filename = data_prefix
+    _filename += '_{}_indexmap'.format(name)
+    _filename += '_{}ns'.format(num_samples)
+    _filename += '_{}sl'.format(seq_length)
+    _filename += '_{}s'.format(seed)
+    doc_idx_filename = _filename + '_doc_idx.npy'
+    sample_idx_filename = _filename + '_sample_idx.npy'
+    shuffle_idx_filename = _filename + '_shuffle_idx.npy'
+
+    # Build the indexed mapping if not exist.
+    if int(os.environ['LOCAL_RANK']) == 0:
+        if (not os.path.isfile(doc_idx_filename)) or \
+                (not os.path.isfile(sample_idx_filename)) or \
+                (not os.path.isfile(shuffle_idx_filename)):
+
+            print_rank_0(' > WARNING: could not find index map files, building '
+                         'the indices on rank 0 ...')
+
+            # For the last epoch, decide whether include the entire epoch
+            # in the global shuffle or not.
+
+            # If we need only one epoch, then separating last epoch  does
+            # not mean anything.
+            if num_epochs == 1:
+                separate_last_epoch = False
+                print(' > only one epoch required, setting '
+                      'separate_last_epoch to False', flush=True)
+
+            else:
+                # Get the number of samples for the last epoch
+                num_samples_from_epochs_minus_one = (
+                                                            (num_epochs - 1) * tokens_per_epoch - 1) // seq_length
+                last_epoch_num_samples = num_samples - \
+                                         num_samples_from_epochs_minus_one
+                assert last_epoch_num_samples >= 0, \
+                    'last epoch number of samples should be non-negative.'
+                num_samples_per_epoch = (tokens_per_epoch - 1) // seq_length
+                assert last_epoch_num_samples < (num_samples_per_epoch + 1), \
+                    'last epoch number of samples exceeded max value.'
+                # If we have less than 80% of the samples for the last epoch,
+                # seperate out the epoch and treat it differently.
+                # Note: the 80% number is just based on common sense and can
+                # be adjusted if needed.
+                separate_last_epoch = (last_epoch_num_samples <
+                                       int(0.80 * num_samples_per_epoch))
+                if separate_last_epoch:
+                    string = ' > last epoch number of samples ({}) is smaller ' \
+                             'than 80% of number of samples per epoch ({}), ' \
+                             'setting separate_last_epoch to True'
+                else:
+                    string = ' > last epoch number of samples ({}) is larger ' \
+                             'than 80% of number of samples per epoch ({}), ' \
+                             'setting separate_last_epoch to False'
+                print(string.format(last_epoch_num_samples,
+                                    num_samples_per_epoch), flush=True)
+
+            # doc-idx.
+            start_time = time.time()
+            doc_idx = _build_doc_idx(documents, num_epochs, np_rng,
+                                     separate_last_epoch)
+            np.save(doc_idx_filename, doc_idx, allow_pickle=True)
+            print_rank_0(' > elasped time to build and save doc-idx mapping '
+                         '(seconds): {:4f}'.format(time.time() - start_time))
+            # sample-idx.
+            start_time = time.time()
+            # Use C++ implementation for speed.
+            # First compile and then import.
+            from megatron.data import helpers
+            assert doc_idx.dtype == np.int32
+            assert sizes.dtype == np.int32
+            sample_idx = helpers.build_sample_idx(sizes, doc_idx, seq_length,
+                                                  num_epochs, tokens_per_epoch)
+            # sample_idx = _build_sample_idx(sizes, doc_idx, seq_length,
+            #                               num_epochs, tokens_per_epoch)
+            np.save(sample_idx_filename, sample_idx, allow_pickle=True)
+            print_rank_0(' > elasped time to build and save sample-idx mapping '
+                         '(seconds): {:4f}'.format(time.time() - start_time))
+            # shuffle-idx.
+            start_time = time.time()
+            # -1 is due to data structure used to retieve the index:
+            #    sample i --> [sample_idx[i], sample_idx[i+1])
+            if separate_last_epoch:
+                num_samples_ = num_samples_from_epochs_minus_one
+            else:
+                num_samples_ = sample_idx.shape[0] - 1
+            shuffle_idx = _build_shuffle_idx(num_samples_,
+                                             sample_idx.shape[0] - 1, np_rng)
+            np.save(shuffle_idx_filename, shuffle_idx, allow_pickle=True)
+            print_rank_0(' > elasped time to build and save shuffle-idx mapping'
+                         ' (seconds): {:4f}'.format(time.time() - start_time))
+
+    # This should be a barrier but nccl barrier assumes
+    # device_index=rank which is not the case for model
+    # parallel case
+    counts = torch.cuda.LongTensor([1])
+    torch.distributed.all_reduce(counts, group=mpu.get_data_parallel_group())
+    torch.distributed.all_reduce(counts, group=mpu.get_pipeline_model_parallel_group())
+    assert counts[0].item() == (
+            torch.distributed.get_world_size() //
+            torch.distributed.get_world_size(group=mpu.get_tensor_model_parallel_group()))
+
+    # Load mappings.
+    start_time = time.time()
+    print_rank_0(' > loading doc-idx mapping from {}'.format(
+        doc_idx_filename))
+    doc_idx = np.load(doc_idx_filename, allow_pickle=True, mmap_mode='r')
+    print_rank_0(' > loading sample-idx mapping from {}'.format(
+        sample_idx_filename))
+    sample_idx = np.load(sample_idx_filename, allow_pickle=True, mmap_mode='r')
+    print_rank_0(' > loading shuffle-idx mapping from {}'.format(
+        shuffle_idx_filename))
+    shuffle_idx = np.load(shuffle_idx_filename, allow_pickle=True, mmap_mode='r')
+    print_rank_0('    loaded indexed file in {:3.3f} seconds'.format(
+        time.time() - start_time))
+    print_rank_0('    total number of samples: {}'.format(
+        sample_idx.shape[0]))
+    print_rank_0('    total number of epochs: {}'.format(num_epochs))
+
+    return doc_idx, sample_idx, shuffle_idx
+
+
+def MixedFusedLayerNormInit(self, normalized_shape, eps=1e-5, no_persist_layer_norm=True, sequence_parallel=False):
+    super(MixedFusedLayerNorm, self).__init__()
+    if isinstance(normalized_shape, numbers.Integral):
+        normalized_shape = (normalized_shape,)
+    self.normalized_shape = torch.Size(normalized_shape)
+    self.eps = eps
+    self.weight = torch.nn.parameter.Parameter(torch.Tensor(*normalized_shape))
+    self.bias = torch.nn.parameter.Parameter(torch.Tensor(*normalized_shape))
+    self.reset_parameters()
+    self.no_persist_layer_norm = True
+    self.sequence_parallel = sequence_parallel
+
+    # set sequence parallelism flag on weight and bias parameters
+    setattr(self.weight, 'sequence_parallel', self.sequence_parallel)
+    setattr(self.bias, 'sequence_parallel', self.sequence_parallel)
+
+
+def MixedFusedLayerNormForward(self, input):
+    if self.no_persist_layer_norm:
+        return torch.nn.functional.layer_norm(input, self.normalized_shape, self.weight, self.bias, self.eps)
+    else:
+        output = FastLayerNormFN.apply(input, self.weight, self.bias, self.eps)
+        output = make_viewless_tensor(inp=output, requires_grad=input.requires_grad, keep_graph=True)
+    return output
+
+
+def is_kernel_available(self, mask, b, np, sq, sk):
+    return (
+        self.scaled_masked_softmax_fusion  # user want to fuse
+        and self.input_in_float16  # input must be fp16
+        and 32 < sk <= 512  # sk must be 32 ~ 512
+        and sq % 16 == 0  # sq must be divisor of 16
+        and sk % 16 == 0  # sk must be divisor of 16
+    )
+
+
+def forward_fused_softmax(self, input, mask):
+    return torch_npu.npu_scaled_masked_softmax(input, mask, self.scale, False)
+
+
+def clip_grad_norm_fp32(parameters, grads_for_norm, max_norm, norm_type=2, model_parallel_group=None):
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
     if isinstance(grads_for_norm, torch.Tensor):
@@ -438,24 +298,19 @@ def clip_grad_norm_fp32(parameters, grads_for_norm,
     total_norm = 0.0
 
     # Calculate norm.
-    if norm_type == inf:
+    if norm_type == math.inf:
         total_norm = max(grad.abs().max() for grad in grads_for_norm)
         total_norm_cuda = torch.cuda.FloatTensor([float(total_norm)])
         # Take max across all model-parallel GPUs.
-        torch.distributed.all_reduce(total_norm_cuda,
-                                     op=torch.distributed.ReduceOp.MAX,
-                                     group=model_parallel_group)
+        torch.distributed.all_reduce(total_norm_cuda, op=torch.distributed.ReduceOp.MAX, group=model_parallel_group)
         total_norm = total_norm_cuda[0].item()
-
     else:
         for grad in grads_for_norm:
             grad_norm = torch.norm(grad, norm_type)
             total_norm += grad_norm ** norm_type
 
         # Sum across all model-parallel GPUs.
-        torch.distributed.all_reduce(total_norm,
-                                     op=torch.distributed.ReduceOp.SUM,
-                                     group=model_parallel_group)
+        torch.distributed.all_reduce(total_norm, op=torch.distributed.ReduceOp.SUM, group=model_parallel_group)
         total_norm = total_norm.item() ** (1.0 / norm_type)
 
     # Scale.
@@ -463,141 +318,27 @@ def clip_grad_norm_fp32(parameters, grads_for_norm,
     if clip_coeff < 1.0:
         for p in parameters:
             p.grad.detach().mul_(clip_coeff)
-
     return total_norm
 
 
-megatron.optimizer.clip_grads.clip_grad_norm_fp32 = clip_grad_norm_fp32
-megatron.optimizer.optimizer.clip_grad_norm_fp32 = clip_grad_norm_fp32
-
-# INPLACE.11: _CUDA_RNG_STATE_TRACKER
-import contextlib
-from megatron.mpu.random import CudaRNGStatesTracker, _CUDA_RNG_STATE_TRACKER, _MODEL_PARALLEL_RNG_TRACKER_NAME
-
-
-class CudaRNGStatesTracker:
-    """Tracker for the cuda RNG states.
-
-    Using the `add` method, a cuda rng state is initialized based on
-    the input `seed` and is assigned to `name`. Later, by forking the
-    rng state, we can perform operations and return to our starting
-    cuda state.
-    """
-
-    def __init__(self):
-        # Map from a string name to the cuda rng state.
-        self.states_ = {}
-        # Seeds are just for book keeping and ensure no seed is set twice.
-        self.seeds_ = set()
-
-    def reset(self):
-        """Set to the initial state (no tracker)."""
-        self.states_ = {}
-        self.seeds_ = set()
-
-    def get_states(self):
-        """Get rng states. Copy the dictionary so we have direct
-        pointers to the states, not just a pointer to the dictionary."""
-        states = {}
-        for name in self.states_:
-            states[name] = self.states_[name]
-        return states
-
-    def set_states(self, states):
-        """Set the rng states. For efficiency purposes, we do not check
-        the size of seed for compatibility."""
-        self.states_ = states
-
-    def add(self, name, seed):
-        """Track the rng state."""
-        # Check seed is not already used.
-        if seed in self.seeds_:
-            raise Exception('seed {} already exists'.format(seed))
-        self.seeds_.add(seed)
-        # Check that state is not already defined.
-        if name in self.states_:
-            raise Exception('cuda rng state {} already exists'.format(name))
-        # Get the current rng state.
-        # orig_rng_state = torch.cuda.get_rng_state()
-        # Set the new state and store it.
-        torch.cuda.manual_seed(seed)
-        # self.states_[name] = torch.cuda.get_rng_state()
-        # Reset rng state to what it was.
-        # _set_cuda_rng_state(orig_rng_state)
-
-    @contextlib.contextmanager
-    def fork(self, name=_MODEL_PARALLEL_RNG_TRACKER_NAME):
-        yield
-        # """Fork the cuda rng state, perform operations, and exit with
-        # the original state."""
-        # # Check if we have added the state
-        # if name not in self.states_:
-        #     raise Exception('cuda rng state {} is not added'.format(name))
-        # Store current rng state.
-        # orig_cuda_rng_state = torch.cuda.get_rng_state()
-        # Set rng state to the desired one
-        # _set_cuda_rng_state(self.states_[name])
-        # Do the stuff we wanted to do.
-        # try:
-        #     yield
-        # finally:
-        #     # Update the current rng state for later use.
-        #     self.states_[name] = torch.cuda.get_rng_state()
-        #     # And set the state to the original state we started with.
-        #     _set_cuda_rng_state(orig_cuda_rng_state)
-
-
-megatron.mpu.random.CudaRNGStatesTracker = CudaRNGStatesTracker
-megatron.mpu.random._CUDA_RNG_STATE_TRACKER = CudaRNGStatesTracker()
-
-# INPLACE.12: _unscale_main_grads_and_check_for_nan
-from megatron.optimizer.optimizer import Float16OptimizerWithFloat16Params
-
-
-def _unscale_main_grads_and_check_for_nan(self):
-    main_grads = []
-    # fp32 params fromm float16 ones.
-    for main_group in self.fp32_from_float16_groups:
-        for main_param in main_group:
-            if main_param.grad is not None:
-                main_grads.append(main_param.grad.data)
-    # Append fp32 parameters.
-    for main_group in self.fp32_from_fp32_groups:
-        for main_param in main_group:
-            if main_param.grad is not None:
-                main_grads.append(main_param.grad.data)
-    # Reset found inf.
-    self.found_inf.fill_(0.0)
-    # Unscale and set found inf/nan
-    torch._amp_foreach_non_finite_check_and_unscale_(
-        main_grads, self.found_inf, self.grad_scaler.inv_scale)
-    # Update across all model parallel instances.
-    torch.distributed.all_reduce(self.found_inf,
-                                 op=torch.distributed.ReduceOp.MAX,
-                                 group=mpu.get_model_parallel_group())
-    torch.distributed.all_reduce(self.found_inf,
-                                 op=torch.distributed.ReduceOp.MAX,
-                                 group=mpu.get_data_parallel_group())
-
-    # Check for nan.
-    found_inf_flag = (self.found_inf.item() > 0)
-    return found_inf_flag
-
-
-Float16OptimizerWithFloat16Params._unscale_main_grads_and_check_for_nan = _unscale_main_grads_and_check_for_nan
-
-# INPLACE.13: refine overflow flag
-from megatron import schedules, get_num_microbatches, get_args, get_timers
-from megatron.schedules import dummy_handler, forward_step, custom_backward
-from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
+def _compile_dependencies():
+    if torch.distributed.get_rank() == 0:
+        start_time = time.time()
+        print('> compiling dataset index builder ...')
+        from megatron.data.dataset_utils import compile_helper
+        compile_helper()
+        print('>>> done with dataset index builder. Compilation time: {:.3f} '
+              'seconds'.format(time.time() - start_time), flush=True)
 
 
 def clear_npu_overflow_flag():
+    # TODO: async operation and 1980B compatible adaptation
     float_status = torch.zeros(8).npu()
     result = torch.npu_clear_float_status(float_status)
 
 
 def get_npu_overflow_flag():
+    # TODO: async operation and 1980B compatible adaptation
     float_status = torch.zeros(8).npu()
     result = torch.npu_get_float_status(float_status)
     if float_status.cpu()[0] != 0:
@@ -607,25 +348,14 @@ def get_npu_overflow_flag():
 
 
 def set_npu_overflow_flag():
+    # TODO: async operation and 1980B compatible adaptation
     torch.tensor([65504]).half().npu() + 100
 
 
-def backward_step(optimizer, input_tensor, output_tensor, output_tensor_grad):
-    """Backward step through passed-in output tensor.
-
-    If last stage, output_tensor_grad is None, otherwise gradient of loss
-    with respect to stage's output tensor.
-
-    Returns gradient of loss with respect to input tensor (None if first
-    stage)."""
-
-    # NOTE: This code currently can handle at most one skip connection. It
-    # needs to be modified slightly to support arbitrary numbers of skip
-    # connections.
+def backward_step(optimizer, input_tensor, output_tensor, output_tensor_grad, timers):
     args = get_args()
-
-    timers = get_timers()
-    timers('backward-compute').start()
+    if timers is not None:
+        timers('backward-compute', log_level=2).start()
 
     # Retain the grad on the input_tensor.
     unwrap_input_tensor_grad = False
@@ -667,157 +397,112 @@ def backward_step(optimizer, input_tensor, output_tensor, output_tensor_grad):
     if unwrap_input_tensor_grad:
         input_tensor_grad = input_tensor_grad[0]
 
-    timers('backward-compute').stop()
+    if timers is not None:
+        timers('backward-compute').stop()
 
     return input_tensor_grad
 
 
-def forward_backward_no_pipelining(forward_step_func, data_iterator, model,
-                                   optimizer, timers, forward_only):
-    """Run forward and backward passes with no pipeline parallelism
-    (no inter-stage communication).
-
-    Returns dictionary with losses."""
+def forward_backward_no_pipelining(forward_step_func, data_iterator, model, optimizer, timers, forward_only,
+                                   collect_non_loss_data=False):
     assert len(model) == 1
     model = model[0]
 
     context_handler = dummy_handler
-    if isinstance(model, torchDDP):
+    if isinstance(model, torch.nn.parallel.distributed.DistributedDataParallel):
         context_handler = model.no_sync
 
-    losses_reduced = []
+    forward_data_store = []
     input_tensor, output_tensor_grad = None, None
     overflow_flag_all = False
     with context_handler():
         for i in range(get_num_microbatches() - 1):
-            output_tensor = forward_step(forward_step_func, data_iterator, model,
-                                         input_tensor, losses_reduced)
+            output_tensor = forward_step(forward_step_func, data_iterator,
+                                         model, input_tensor, forward_data_store,
+                                         timers, collect_non_loss_data)
             if not forward_only:
                 backward_step(optimizer, input_tensor, output_tensor,
-                              output_tensor_grad)
+                              output_tensor_grad, timers)
 
             overflow_flag = get_npu_overflow_flag()
             overflow_flag_all = overflow_flag or overflow_flag_all
-    output_tensor = forward_step(forward_step_func, data_iterator, model,
-                                 input_tensor, losses_reduced)
+
+    # Run computation for last microbatch out of context handler (want to
+    # synchronize gradients).
+    output_tensor = forward_step(forward_step_func, data_iterator,
+                                 model, input_tensor, forward_data_store,
+                                 timers, collect_non_loss_data)
     if not forward_only:
-        backward_step(optimizer, input_tensor, output_tensor, output_tensor_grad)
+        backward_step(optimizer, input_tensor, output_tensor,
+                      output_tensor_grad, timers)
 
     overflow_flag = get_npu_overflow_flag()
     overflow_flag_all = overflow_flag or overflow_flag_all
-
     if overflow_flag_all:
         set_npu_overflow_flag()
-    return losses_reduced
+    return forward_data_store
 
-
-schedules.forward_backward_no_pipelining = forward_backward_no_pipelining
-
-# INPLACE.14: remove dropout in ParallelTransformerLayer
-from megatron.model.transformer import ParallelTransformerLayer, bias_dropout_add_fused_train, \
-    bias_dropout_add_fused_inference, get_bias_dropout_add
-from megatron.model.enums import AttnMaskType, ModelType, LayerType, AttnType
-
-
-def forward(self, hidden_states, attention_mask,
-            encoder_output=None, enc_dec_attn_mask=None,
-            inference_params=None):
-    # hidden_states: [b, s, h]
-
-    # Layer norm at the beginning of the transformer layer.
-    layernorm_output = self.input_layernorm(hidden_states)
-    # Self attention.
-    attention_output, attention_bias = \
-        self.self_attention(
-            layernorm_output,
-            attention_mask,
-            inference_params=inference_params)
-
-    # Residual connection.
-    if self.apply_residual_connection_post_layernorm:
-        residual = layernorm_output
-    else:
-        residual = hidden_states
-
-    # jit scripting for a nn.module (with dropout) is not
-    # trigerring the fusion kernel. For now, we use two
-    # different nn.functional routines to account for varying
-    # dropout semantics during training and inference phases.
-    if self.bias_dropout_fusion:
-        if self.training:
-            bias_dropout_add_func = bias_dropout_add_fused_train
-        else:
-            bias_dropout_add_func = bias_dropout_add_fused_inference
-    else:
-        bias_dropout_add_func = get_bias_dropout_add(self.training)
-
-    # re-enable torch grad to enable fused optimization.
-    with torch.enable_grad():
-        layernorm_input = bias_dropout_add_func(
-            attention_output,
-            attention_bias.expand_as(residual),
-            residual,
-            0.)  # using 0. instead of self.hidden_dropout to avoid non-convergence
-
-    # Layer norm post the self attention.
-    layernorm_output = self.post_attention_layernorm(layernorm_input)
-
-    if self.layer_type == LayerType.decoder:
-        attention_output, attention_bias = \
-            self.inter_attention(layernorm_output,
-                                 enc_dec_attn_mask,
-                                 encoder_output=encoder_output)
-        # residual connection
-        if self.apply_residual_connection_post_layernorm:
-            residual = layernorm_output
-        else:
-            residual = layernorm_input
-
-        # re-enable torch grad to enable fused optimization.
-        with torch.enable_grad():
-            layernorm_input = bias_dropout_add_func(
-                attention_output,
-                attention_bias.expand_as(residual),
-                residual,
-                0.)  # using 0. instead of self.hidden_dropout to avoid non-convergence
-
-        # Layer norm post the decoder attention
-        layernorm_output = self.post_inter_attention_layernorm(layernorm_input)
-
-    # MLP.
-    mlp_output, mlp_bias = self.mlp(layernorm_output)
-
-    # Second residual connection.
-    if self.apply_residual_connection_post_layernorm:
-        residual = layernorm_output
-    else:
-        residual = layernorm_input
-
-    # re-enable torch grad to enable fused optimization.
-    with torch.enable_grad():
-        output = bias_dropout_add_func(
-            mlp_output,
-            mlp_bias.expand_as(residual),
-            residual,
-            0.)
-
-    return output
-
-
-ParallelTransformerLayer.forward = forward
-
-from megatron import initialize
-from megatron.initialize import _warmup_jit_function
 
 def set_jit_fusion_options():
     """Set PyTorch JIT layer fusion options."""
-
-    # legacy pytorch fuser
-    torch._C._jit_set_profiling_mode(False)
-    torch._C._jit_set_profiling_executor(False)
-    torch._C._jit_override_can_fuse_on_cpu(True)
-    torch._C._jit_override_can_fuse_on_gpu(True)
-
+    # flags required to enable jit fusion kernels
+    TORCH_MAJOR = int(torch.__version__.split('.')[0])
+    TORCH_MINOR = int(torch.__version__.split('.')[1])
+    if (TORCH_MAJOR > 1) or (TORCH_MAJOR == 1 and TORCH_MINOR >= 10):
+        # nvfuser
+        torch._C._jit_set_profiling_executor(True)
+        torch._C._jit_set_profiling_mode(True)
+        torch._C._jit_override_can_fuse_on_cpu(False)
+        torch._C._jit_override_can_fuse_on_gpu(False)
+        torch._C._jit_set_texpr_fuser_enabled(False)
+        # torch._C._jit_set_nvfuser_enabled(True)
+        torch._C._debug_set_autodiff_subgraph_inlining(False)
+    else:
+        # legacy pytorch fuser
+        torch._C._jit_set_profiling_mode(False)
+        torch._C._jit_set_profiling_executor(False)
+        torch._C._jit_override_can_fuse_on_cpu(True)
+        torch._C._jit_override_can_fuse_on_gpu(True)
     _warmup_jit_function()
 
-initialize.set_jit_fusion_options = set_jit_fusion_options
+
+def _unscale_main_grads_and_check_for_nan(self):
+    main_grads = self._collect_main_grad_data_for_unscaling()
+    self.found_inf.fill_(0.0)
+    torch._amp_foreach_non_finite_check_and_unscale_(main_grads, self.found_inf, self.grad_scaler.inv_scale)
+    torch.distributed.all_reduce(self.found_inf, op=torch.distributed.ReduceOp.MAX, group=self.get_model_parallel_group())
+    torch.distributed.all_reduce(self.found_inf, op=torch.distributed.ReduceOp.MAX, group=mpu.get_data_parallel_group())
+    found_inf_flag = (self.found_inf.item() > 0)
+    return found_inf_flag
+
+
+os.environ['CUDA_DEVICE_MAX_CONNECTIONS'] = '1'
+torch.Tensor.type = wrapper_type(torch.Tensor.type)
+torch.distributed.all_reduce = wrapper_dist(torch.distributed.all_reduce)
+
+megatron.optimizer.Adam = torch.optim.AdamW
+megatron.core.tensor_parallel.random._set_cuda_rng_state = _set_cuda_rng_state
+megatron.data.gpt_dataset._build_index_mappings = _build_index_mappings
+megatron.model.module.fp32_to_float16 = fp32_to_float16
+megatron.model.module.float16_to_fp32 = float16_to_fp32
+
+megatron.model.fused_layer_norm.MixedFusedLayerNorm.__init__ = MixedFusedLayerNormInit
+megatron.model.fused_layer_norm.MixedFusedLayerNorm.forward = MixedFusedLayerNormForward
+megatron.model.fused_softmax.FusedScaleMaskSoftmax.is_kernel_available = is_kernel_available
+megatron.model.fused_softmax.FusedScaleMaskSoftmax.forward_fused_softmax = forward_fused_softmax
+
+megatron.optimizer.clip_grads.clip_grad_norm_fp32 = clip_grad_norm_fp32
+megatron.optimizer.optimizer.MixedPrecisionOptimizer._unscale_main_grads_and_check_for_nan = _unscale_main_grads_and_check_for_nan
+
+
+megatron.initialize._compile_dependencies = _compile_dependencies
+
+megatron.schedules.backward_step = backward_step
+megatron.schedules.forward_backward_no_pipelining = forward_backward_no_pipelining
+
+for k, v in sys.modules.items():
+    if 'megatron' in k and hasattr(v, 'set_jit_fusion_options'):
+        setattr(v, 'set_jit_fusion_options', set_jit_fusion_options)
+
+    if 'megatron' in k and hasattr(v, 'clip_grad_norm_fp32'):
+        setattr(v, 'clip_grad_norm_fp32', clip_grad_norm_fp32)

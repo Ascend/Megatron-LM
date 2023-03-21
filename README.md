@@ -17,7 +17,7 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
 
   ```
   url=https://github.com/NVIDIA/Megatron-LM.git
-  commit_id=0bb597b42c53355a567aba2a1357cc34b9d99ddd
+  commit_id=285068c8108e0e8e6538f54fe27c3ee86c5217a2
   ```
 
 - 适配昇腾 AI 处理器的实现：
