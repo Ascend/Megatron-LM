@@ -265,25 +265,18 @@ def MixedFusedLayerNormForward(self, input):
     return output
 
 
-def FusedScaleMaskSoftmaxForward(self, input, mask):
-    # [b, np, sq, sk]
-    assert input.dim() == 4
+def is_kernel_available(self, mask, b, np, sq, sk):
+    return (
+        self.scaled_masked_softmax_fusion  # user want to fuse
+        and self.input_in_float16  # input must be fp16
+        and 32 < sk <= 512  # sk must be 32 ~ 512
+        and sq % 16 == 0  # sq must be divisor of 16
+        and sk % 16 == 0  # sk must be divisor of 16
+    )
 
-    if self.input_in_float16 and self.softmax_in_fp32:
-        input = input.float()
-    if self.scale is not None:
-        input = input * self.scale
-    mask_output = self.mask_func(input, mask) if mask is not None else input
-    probs = torch.nn.Softmax(dim=-1)(mask_output)
-    if self.input_in_float16 and self.softmax_in_fp32:
-        if self.input_in_fp16:
-            probs = probs.half()
-        else:
-            probs = probs.bfloat16()
 
-    # probs = torch_npu.npu_scaled_masked_softmax(input, mask, self.scale, False)
-
-    return probs
+def forward_fused_softmax(self, input, mask):
+    return torch_npu.npu_scaled_masked_softmax(input, mask, self.scale, False)
 
 
 def clip_grad_norm_fp32(parameters, grads_for_norm, max_norm, norm_type=2, model_parallel_group=None):
@@ -495,7 +488,8 @@ megatron.model.module.float16_to_fp32 = float16_to_fp32
 
 megatron.model.fused_layer_norm.MixedFusedLayerNorm.__init__ = MixedFusedLayerNormInit
 megatron.model.fused_layer_norm.MixedFusedLayerNorm.forward = MixedFusedLayerNormForward
-megatron.model.fused_softmax.FusedScaleMaskSoftmax.forward = FusedScaleMaskSoftmaxForward
+megatron.model.fused_softmax.FusedScaleMaskSoftmax.is_kernel_available = is_kernel_available
+megatron.model.fused_softmax.FusedScaleMaskSoftmax.forward_fused_softmax = forward_fused_softmax
 
 megatron.optimizer.clip_grads.clip_grad_norm_fp32 = clip_grad_norm_fp32
 megatron.optimizer.optimizer.MixedPrecisionOptimizer._unscale_main_grads_and_check_for_nan = _unscale_main_grads_and_check_for_nan
