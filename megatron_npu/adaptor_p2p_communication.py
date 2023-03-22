@@ -1,5 +1,6 @@
 import torch
 import operator
+import megatron
 from functools import reduce
 from megatron import get_args, core
 from megatron.core import mpu
