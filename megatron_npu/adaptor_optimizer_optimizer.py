@@ -1,5 +1,7 @@
+import sys
 import torch
-import megatron
+import megatron.optimizer
+from megatron.core import mpu
 
 
 def _unscale_main_grads_and_check_for_nan(self):

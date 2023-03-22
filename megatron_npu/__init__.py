@@ -1,15 +1,27 @@
 import os
 import copy
+import sys
+
 import torch
 import torch_npu
 from functools import wraps
 from torch_npu.contrib import transfer_to_npu
+from . import adaptor_amp_c
+
+if 'amp_C' in sys.modules:
+    del sys.modules['amp_C']
+sys.modules['amp_C'] = __import__('megatron_npu.adaptor_amp_c')
+
+from . import adaptor_core_tensor_parallel
+from . import adaptor_core_utils
 from . import adaptor_data_gpt_dataset
+from . import adaptor_initialize
 from . import adaptor_model_fused_layer_norm
 from . import adaptor_model_fused_softmax
 from . import adaptor_model_module
 from . import adaptor_optimizer_clip_grads
 from . import adaptor_optimizer_optimizer
+from . import adaptor_p2p_communication
 from . import adaptor_schedules
 
 
