@@ -20,6 +20,7 @@ from . import adaptor_model_fused_layer_norm
 from . import adaptor_model_fused_softmax
 from . import adaptor_model_module
 from . import adaptor_optimizer_clip_grads
+from . import adaptor_optimizer_distrib_optimizer
 from . import adaptor_optimizer_optimizer
 from . import adaptor_p2p_communication
 from . import adaptor_schedules
