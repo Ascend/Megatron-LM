@@ -27,17 +27,10 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
   请参考《[Pytorch框架训练环境准备](https://www.hiascend.com/document/detail/zh/ModelZoo/pytorchframework/ptes)》。
 
 - 克隆原始仓
-
   ```
   git clone https://github.com/NVIDIA/Megatron-LM.git
   cd Megatron-LM
   git checkout 285068c8108e0e8e6538f54fe27c3ee86c5217a2
-  ```
-
-- 安装依赖（根据模型需求，按需添加所需依赖）。
-
-  ```
-  pip install -r requirements.txt
   ```
 
 - 下载安装 Megatron_npu
@@ -45,6 +38,11 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
   git clone https://gitee.com/ascend/Megatron-LM.git -b dev megatron_npu
   cd megatron_npu
   pip install -e .
+  ```
+
+- 安装依赖（根据模型需求，按需添加所需依赖）。
+  ```
+  pip install -r requirements.txt
   ```
 
 ## 准备数据集
