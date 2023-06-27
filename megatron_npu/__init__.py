@@ -25,6 +25,7 @@ from . import adaptor_optimizer_optimizer
 from . import adaptor_p2p_communication
 from . import adaptor_schedules
 from . import adaptor_core_cross_entropy
+from . import adaptor_core_layers
 
 def wrapper_type(fn):
     @wraps(fn)
