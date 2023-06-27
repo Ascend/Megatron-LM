@@ -35,7 +35,7 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
 
 - 下载安装 Megatron_npu
   ```
-  git clone https://gitee.com/ascend/Megatron-LM.git -b dev megatron_npu
+  git clone https://gitee.com/ascend/Megatron-LM.git megatron_npu
   cd megatron_npu
   pip install -e .
   ```
@@ -52,10 +52,10 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
    ```bash ./tests/dataset_preprocess_t5.sh```
 
 2. 数据集目录结构
-   将数据集默认放置在```./dataset/en_wiki/preprocess/```下，数据集的目录结构如下所示：
+   将数据集默认放置在```./dataset/en_wiki```下，数据集的目录结构如下所示：
 
    ```
-   ├── ./dataset/en_wiki/preprocess/
+   ├── ./dataset/en_wiki
          ├── bert-large-uncased-vocab.txt               
          ├── my-t5_text_sentence.bin
          ├── my-t5_text_sentence.idx
@@ -78,18 +78,13 @@ bash tests/test.sh
 
 ## 训练模型
 
-1. 需要在模型执行前导入 megatron_npu 包。
+1. 执行如下前置命令
    ```
-   import megatron_npu
-   ```
-
-2. 进入解压后的源码包根目录。
-
-   ```
-   cd ./${模型文件夹名称} 
+   cd ./tests_gpt/
+   mv pretrain_gpt.py ../../
    ```
 
-3. 运行训练脚本。
+2. 运行训练脚本。
 
    该模型支持单机单卡训练和单机8卡训练。
 
@@ -98,7 +93,7 @@ bash tests/test.sh
       启动8卡训练。
 
       ```
-      bash ./tests/train_full_8p.sh   
+      bash pretrain_gpt_distributed.sh
       ```
 
    训练完成后，权重文件保存在./checkpoint下，并输出模型训练精度和性能信息。
@@ -111,7 +106,6 @@ bash tests/test.sh
 | -------  | -----  |----------:| ------    |
 | 8p-竞品A  | 8.688  |       232 | 100000    |
 | 8p-NPU   | 8.701  |       100 | 100000    |
-| 32p-NPU  | 6.319  |       393 | 100000    |
 
 备注：一定要有竞品和NPU。
 
@@ -120,6 +114,7 @@ bash tests/test.sh
 ## 变更
 
 2022.08.26：首次发布
+2023.06.12：新增GPT3
 
 ## 已知问题
 
