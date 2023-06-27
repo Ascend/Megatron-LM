@@ -1,3 +1,8 @@
 regex
 pybind11
 six
+torchvision==0.9.1
+decorator
+sympy
+scipy
+attrs
