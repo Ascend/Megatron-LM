@@ -333,4 +333,5 @@ def Float16OptimizerWithFloat16ParamsInit(self, optimizer, clip_grad, log_num_ze
 # megatron.optimizer.Adam = torch.optim.AdamW
 megatron.optimizer.Adam = AdamW
 
+megatron.optimizer.optimizer.MixedPrecisionOptimizer._unscale_main_grads_and_check_for_nan = _unscale_main_grads_and_check_for_nan
 megatron.optimizer.optimizer.Float16OptimizerWithFloat16Params.__init__ = Float16OptimizerWithFloat16ParamsInit
