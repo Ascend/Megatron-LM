@@ -1,5 +1,6 @@
 import torch
 import megatron.optimizer
+from megatron.core import tensor_parallel
 
 
 def DistributedOptimizerInit(self, optimizer, clip_grad, log_num_zeros_in_grad, params_have_main_grad,
