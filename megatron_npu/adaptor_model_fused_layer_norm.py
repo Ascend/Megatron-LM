@@ -24,8 +24,7 @@ def MixedFusedLayerNormInit(self, normalized_shape, eps=1e-5, no_persist_layer_n
 
 def MixedFusedLayerNormForward(self, input):
     if self.no_persist_layer_norm:
-        dtype = input.dtype
-        return torch.nn.functional.layer_norm(input.float(), self.normalized_shape, self.weight, self.bias, self.eps).to(dtype)
+        return torch.nn.functional.layer_norm(input, self.normalized_shape, self.weight, self.bias, self.eps)
     else:
         output = FastLayerNormFN.apply(input, self.weight, self.bias, self.eps)
         output = make_viewless_tensor(inp=output, requires_grad=input.requires_grad, keep_graph=True)
