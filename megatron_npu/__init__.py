@@ -27,6 +27,7 @@ from . import adaptor_schedules
 from . import adaptor_core_cross_entropy
 from . import adaptor_core_layers
 from . import adaptor_model_transformer
+from . import adaptor_arguments
 
 def wrapper_type(fn):
     @wraps(fn)

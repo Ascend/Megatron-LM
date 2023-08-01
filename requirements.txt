@@ -6,3 +6,4 @@ decorator
 sympy
 scipy
 attrs
+einops

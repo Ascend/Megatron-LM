@@ -1,10 +1,20 @@
+import math
 import torch
 import torch.nn.functional as F
 import megatron
 from megatron import get_timers, get_args, core, get_num_microbatches
 from megatron.core import mpu, tensor_parallel
+from megatron.model.enums import AttnMaskType, ModelType, LayerType, AttnType
+from megatron.model.transformer import _args_to_kwargs
 from megatron.model.fused_bias_gelu import bias_gelu_impl
+from megatron.model.transformer import ParallelAttention, CoreAttention
+import torch_npu
 
+
+try:
+    from einops import rearrange
+except ImportError:
+    rearrange = None
 
 def ParallelMLPForward(self, hidden_states):
 
@@ -114,5 +124,256 @@ def CoreAttentionForward(self, query_layer, key_layer,
     return context_layer
 
 
+class FlashSelfAttention(torch.nn.Module):
+    """Implement the scaled dot product attention with softmax.
+    Arguments
+    ---------
+        softmax_scale: The temperature to use for the softmax attention.
+                      (default: 1/sqrt(d_keys) where d_keys is computed at
+                      runtime)
+        attention_dropout: The dropout rate to apply to the attention
+                           (default: 0.0)
+    """
+
+    def __init__(self, causal=False, softmax_scale=None, attention_dropout=0.0,
+                 device=None, dtype=None, pre_tockens=None, next_tockens=None, shape_order='SBH'):
+        super().__init__()
+        assert rearrange is not None, 'Please install einops first, e.g., with pip install einops'
+        self.causal = causal
+        self.softmax_scale = softmax_scale
+        self.dropout_p = attention_dropout
+        self.pre_tockens = pre_tockens
+        self.next_tockens = next_tockens
+        self.shape_order = shape_order
+
+
+    def forward(self, q, k, v, n, attention_mask):
+
+        attention_mask = attention_mask.to(q.dtype)
+
+        scale = 1.0/math.sqrt(q.size(2)/n) if self.softmax_scale is None else self.softmax_scale
+
+        output = torch_npu.npu_flash_attention( \
+            q, k, v, n, self.shape_order, \
+            pse=None, \
+            padding_mask=None, \
+            atten_mask=attention_mask, \
+            scale=scale, \
+            pre_tockens=self.pre_tockens, \
+            next_tockens=self.next_tockens, \
+            keep_prob=1-self.dropout_p, \
+            )[0]
+
+        return output
+
+
+
+def ParallelAttentionInit(self, init_method,
+                 output_layer_init_method, layer_number,
+                 attention_type=AttnType.self_attn,
+                 attn_mask_type=AttnMaskType.padding):
+        super(ParallelAttention, self).__init__()
+        args = get_args()
+        self.layer_number = max(1, layer_number)
+        self.attention_type = attention_type
+        self.attn_mask_type = attn_mask_type
+        self.params_dtype = args.params_dtype
+        self.sequence_parallel = args.sequence_parallel
+        self.shape_order = args.shape_order
+        
+        self.use_flash_attn = args.use_flash_attn
+        if self.use_flash_attn:
+        
+            assert attention_type == AttnType.self_attn, ('FlashAttention code path only supports '
+                                                          'self-attention for now')
+            assert self.attn_mask_type == AttnMaskType.causal, ('FlashAttention code path only '
+                                                                'supports causal mask for now')
+            if rearrange is None:
+                raise ImportError('einops is not installed, please install with pip install einops')
+
+        projection_size = args.kv_channels * args.num_attention_heads
+
+        # Per attention head and per partition values.
+        world_size = mpu.get_tensor_model_parallel_world_size()
+        self.hidden_size_per_attention_head = core.utils.divide(
+            projection_size, args.num_attention_heads)
+        self.num_attention_heads_per_partition = core.utils.divide(
+            args.num_attention_heads, world_size)
+
+        # Strided linear layer.
+        if attention_type == AttnType.self_attn:
+            self.query_key_value = tensor_parallel.ColumnParallelLinear(
+                args.hidden_size,
+                3 * projection_size,
+                gather_output=False,
+                init_method=init_method,
+                async_tensor_model_parallel_allreduce=args.async_tensor_model_parallel_allreduce,
+                **_args_to_kwargs())
+        else:
+            assert attention_type == AttnType.cross_attn
+            self.query = tensor_parallel.ColumnParallelLinear(
+                args.hidden_size,
+                projection_size,
+                gather_output=False,
+                init_method=init_method,
+                async_tensor_model_parallel_allreduce=args.async_tensor_model_parallel_allreduce,
+                **_args_to_kwargs())
+
+
+            self.key_value = tensor_parallel.ColumnParallelLinear(
+                args.hidden_size,
+                2 * projection_size,
+                gather_output=False,
+                init_method=init_method,
+                async_tensor_model_parallel_allreduce=args.async_tensor_model_parallel_allreduce,
+                **_args_to_kwargs())
+
+        self.core_attention = CoreAttention(self.layer_number,
+                                            self.attn_mask_type)
+        self.checkpoint_core_attention = args.recompute_granularity == 'selective'
+
+        if self.use_flash_attn:
+            self.core_attention_flash = FlashSelfAttention(
+                causal=True, attention_dropout=args.attention_dropout,
+                pre_tockens=args.pre_tockens, next_tockens=args.next_tockens,
+                shape_order=args.shape_order
+            )
+
+        # Output.
+        self.dense = tensor_parallel.RowParallelLinear(
+            projection_size,
+            args.hidden_size,
+            input_is_parallel=True,
+            init_method=output_layer_init_method,
+            skip_bias_add=True,
+            **_args_to_kwargs())
+
+
+def ParallelAttentionForward(self, hidden_states, attention_mask,
+            encoder_output=None, inference_params=None):
+    # hidden_states: [sq, b, h]
+
+    # =================================================
+    # Pre-allocate memory for key-values for inference.
+    # =================================================
+    if inference_params:
+        if self.layer_number not in inference_params.key_value_memory_dict:
+            inf_max_seq_len = inference_params.max_sequence_len
+            inf_max_batch_size = inference_params.max_batch_size
+            inference_key_memory = self._allocate_memory(
+                inf_max_seq_len, inf_max_batch_size)
+            inference_value_memory = self._allocate_memory(
+                inf_max_seq_len, inf_max_batch_size)
+            inference_params.key_value_memory_dict[self.layer_number] = (
+                inference_key_memory, inference_value_memory)
+        else:
+            inference_key_memory, inference_value_memory = \
+                inference_params.key_value_memory_dict[self.layer_number]
+
+    # =====================
+    # Query, Key, and Value
+    # =====================
+
+    if self.attention_type == AttnType.self_attn:
+        # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
+        mixed_x_layer, _ = self.query_key_value(hidden_states)
+
+        # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
+        new_tensor_shape = mixed_x_layer.size()[:-1] + \
+                           (self.num_attention_heads_per_partition,
+                            3 * self.hidden_size_per_attention_head)
+        mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
+
+        # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
+        (query_layer,
+         key_layer,
+         value_layer) = tensor_parallel.split_tensor_along_last_dim(mixed_x_layer, 3)
+    else:
+        # Attention heads [sk, b, h] --> [sk, b, (np * 2 * hn)]
+        mixed_kv_layer, _ = self.key_value(encoder_output)
+
+        # [sk, b, (np * 2 * hn)] --> [sk, b, np, 2 * hn]
+        new_tensor_shape = mixed_kv_layer.size()[:-1] + \
+                           (self.num_attention_heads_per_partition,
+                            2 * self.hidden_size_per_attention_head)
+        mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
+
+        # [sk, b, np, 2 * hn] --> 2 [sk, b, np, hn]
+        (key_layer,
+         value_layer) = tensor_parallel.split_tensor_along_last_dim(mixed_kv_layer, 2)
+
+        # Attention head [sq, b, h] --> [sq, b, hp]
+        query_layer, _ = self.query(hidden_states)
+        # [sq, b, hp] --> [sq, b, np, hn]
+        new_tensor_shape = query_layer.size()[:-1] + \
+                           (self.num_attention_heads_per_partition,
+                            self.hidden_size_per_attention_head)
+        query_layer = query_layer.view(*new_tensor_shape)
+
+    # ==================================
+    # Adjust key and value for inference
+    # ==================================
+
+    if inference_params:
+        batch_start = inference_params.batch_size_offset
+        batch_end = batch_start + key_layer.size(1)
+        assert batch_end <= inference_key_memory.size(1)
+        sequence_start = inference_params.sequence_len_offset
+        sequence_end = sequence_start + key_layer.size(0)
+        assert sequence_end <= inference_key_memory.size(0)
+        # Copy key and values.
+        inference_key_memory[sequence_start:sequence_end,
+        batch_start:batch_end, ...] = key_layer
+        inference_value_memory[sequence_start:sequence_end,
+        batch_start:batch_end, ...] = value_layer
+        key_layer = inference_key_memory[
+                    :sequence_end, batch_start:batch_end, ...]
+        value_layer = inference_value_memory[
+                      :sequence_end, batch_start:batch_end, ...]
+
+    # ==================================
+    # core attention computation
+    # ==================================
+
+    if not self.use_flash_attn:
+        if self.checkpoint_core_attention:
+            context_layer = self._checkpointed_attention_forward(
+                query_layer, key_layer, value_layer, attention_mask)
+        else:
+            context_layer = self.core_attention(
+                query_layer, key_layer, value_layer, attention_mask)
+    else:
+
+        hidden_head_num = query_layer.size(2)
+        if self.shape_order == 'BSH':
+            q, k, v = [rearrange(x, 's b h d -> b s (h d)').contiguous()
+                for x in (query_layer, key_layer, value_layer)]
+        elif self.shape_order == 'SBH':
+            q, k, v = [rearrange(x, 's b h d -> s b (h d)').contiguous()
+                for x in (query_layer, key_layer, value_layer)]
+        else:
+            raise ImportError('flash attention shape order must be SBH or BSH, please add args shape-order')
+            
+        if not self.sequence_parallel:
+            with tensor_parallel.get_cuda_rng_tracker().fork():
+                context_layer = self.core_attention_flash(q, k, v, hidden_head_num, attention_mask)
+        else:
+            context_layer = self.core_attention_flash(q, k, v, hidden_head_num, attention_mask)
+        
+        if self.shape_order == 'BSH':
+            context_layer = torch.tensor(1.0).to(context_layer.dtype).npu() * context_layer
+        context_layer = rearrange(context_layer, 'b s D -> s b D').contiguous()
+
+    # =================
+    # Output. [sq, b, h]
+    # =================
+
+    output, bias = self.dense(context_layer)
+
+    return output, bias
+
 megatron.model.transformer.ParallelMLP.forward = ParallelMLPForward
 megatron.model.transformer.CoreAttention.forward = CoreAttentionForward
+megatron.model.transformer.FlashSelfAttention = FlashSelfAttention
+megatron.model.transformer.ParallelAttention.__init__ = ParallelAttentionInit
+megatron.model.transformer.ParallelAttention.forward = ParallelAttentionForward
