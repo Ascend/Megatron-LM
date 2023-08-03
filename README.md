@@ -84,7 +84,7 @@ bash tests/test.sh
    mv pretrain_gpt.py ../../
    ```
 
-2. 运行训练脚本。
+2. 运行训练脚本
 
    该模型支持单机单卡训练和单机8卡训练。
 
@@ -94,6 +94,27 @@ bash tests/test.sh
 
       ```
       bash pretrain_gpt_distributed.sh
+      ```
+
+   训练完成后，权重文件保存在./checkpoint下，并输出模型训练精度和性能信息。
+
+3. 使能bf16、fp16的大kernel
+
+   该模型支持单机单卡训练和单机8卡训练。
+
+    - 单机8卡训练
+
+      启动8卡训练。
+
+      ```
+      bash pretrain_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=SBH #FP16 flash-attn SBH输入
+      bash pretrain_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=BSH #FP16 flash-attn BSH输入
+      bash pretrain_gpt_distributed_fp16.sh --pre=2048 --next=0 --shape_order=SBH #FP16 sparse-attn SBH输入
+      bash pretrain_gpt_distributed_fp16.sh --pre=2048 --next=0 --shape_order=BSH #FP16 sparse-attn BSH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=SBH #FP16 flash-attn SBH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=BSH #FP16 flash-attn BSH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=SBH #FP16 sparse-attn SBH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=BSH #FP16 sparse-attn BSH输入
       ```
 
    训练完成后，权重文件保存在./checkpoint下，并输出模型训练精度和性能信息。
