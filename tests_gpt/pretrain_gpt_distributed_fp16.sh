@@ -16,9 +16,9 @@ CHECKPOINT_PATH=./checkpoint_dist
 DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE --nnodes $NNODES --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port $MASTER_PORT"
 
 # 参数校验，data_path为必传参数，其他参数的增删由模型自身决定；此处新增参数需在上面有定义并赋值
-pre_tockens = 0
-next_tockens = 0
-shape_order = ""
+pre_tockens=-1
+next_tockens=-1
+shape_order=""
 for para in $*
 do
     if [[ $para == --pre* ]];then
@@ -29,11 +29,11 @@ do
         shape_order=`echo ${para#*=}`
     fi
 done
-if [[ $pre_tockens == 0 ]];then
+if [[ $pre_tockens == -1 ]];then
     echo "[Error] para \"pre_tockens\" must be confing"
     exit 1
 fi
-if [[ $next_tockens == 0 ]];then
+if [[ $next_tockens == -1 ]];then
     echo "[Error] para \"next_tockens\" must be confing"
     exit 1
 fi
