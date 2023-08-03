@@ -4,6 +4,7 @@ from megatron import get_args
 from megatron.core import mpu
 from megatron.model import ModelType
 from megatron.schedules import custom_backward, dummy_handler, forward_step, get_num_microbatches
+from . import FLAG_SUPPORT_INF_NAN
 
 
 def clear_npu_overflow_flag():
@@ -47,7 +48,8 @@ def backward_step(optimizer, input_tensor, output_tensor, output_tensor_grad, ti
         output_tensor_grad = [output_tensor_grad]
 
     # Backward pass.
-    clear_npu_overflow_flag()
+    if not FLAG_SUPPORT_INF_NAN:
+        clear_npu_overflow_flag()
     if output_tensor_grad[0] is None:
         output_tensor = optimizer.scale_loss(output_tensor[0])
     custom_backward(output_tensor[0], output_tensor_grad[0])
@@ -99,8 +101,9 @@ def forward_backward_no_pipelining(forward_step_func, data_iterator, model, opti
                 backward_step(optimizer, input_tensor, output_tensor,
                               output_tensor_grad, timers)
 
-            overflow_flag = get_npu_overflow_flag()
-            overflow_flag_all = overflow_flag or overflow_flag_all
+            if not FLAG_SUPPORT_INF_NAN:
+                overflow_flag = get_npu_overflow_flag()
+                overflow_flag_all = overflow_flag or overflow_flag_all
 
     # Run computation for last microbatch out of context handler (want to
     # synchronize gradients).
@@ -111,10 +114,11 @@ def forward_backward_no_pipelining(forward_step_func, data_iterator, model, opti
         backward_step(optimizer, input_tensor, output_tensor,
                       output_tensor_grad, timers)
 
-    overflow_flag = get_npu_overflow_flag()
-    overflow_flag_all = overflow_flag or overflow_flag_all
-    if overflow_flag_all:
-        set_npu_overflow_flag()
+    if not FLAG_SUPPORT_INF_NAN:
+        overflow_flag = get_npu_overflow_flag()
+        overflow_flag_all = overflow_flag or overflow_flag_all
+        if overflow_flag_all:
+            set_npu_overflow_flag()
     return forward_data_store
 
 
