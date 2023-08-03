@@ -111,10 +111,10 @@ bash tests/test.sh
       bash pretrain_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=BSH #FP16 flash-attn BSH输入
       bash pretrain_gpt_distributed_fp16.sh --pre=2048 --next=0 --shape_order=SBH #FP16 sparse-attn SBH输入
       bash pretrain_gpt_distributed_fp16.sh --pre=2048 --next=0 --shape_order=BSH #FP16 sparse-attn BSH输入
-      bash pretrain_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=SBH #FP16 flash-attn SBH输入
-      bash pretrain_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=BSH #FP16 flash-attn BSH输入
-      bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=SBH #FP16 sparse-attn SBH输入
-      bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=BSH #FP16 sparse-attn BSH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=SBH #BF16 flash-attn SBH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=BSH #BF16 flash-attn BSH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=SBH #BF16 sparse-attn SBH输入
+      bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=BSH #BF16 sparse-attn BSH输入
       ```
 
    训练完成后，权重文件保存在./checkpoint下，并输出模型训练精度和性能信息。
