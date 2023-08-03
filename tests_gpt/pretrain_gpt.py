@@ -3,6 +3,7 @@
 """Pretrain GPT"""
 import time
 import torch
+import os
 import torch_npu
 import megatron_npu.megatron_npu
 from functools import partial
@@ -112,7 +113,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
 
 
 if __name__ == "__main__":
-    torch_npu.npu.set_compile_mode(jit_compile=True)
+    torch_npu.npu.set_compile_mode(jit_compile=os.getenv("JIT_COMPILE", True))
 
     pretrain(train_valid_test_datasets_provider, model_provider,
              ModelType.encoder_or_decoder,
