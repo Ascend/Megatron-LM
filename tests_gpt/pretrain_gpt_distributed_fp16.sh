@@ -77,7 +77,7 @@ python3 -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --use-flash-attn \
        --pre-tockens $pre_tockens \
        --next-tockens $next_tockens \
-       --shape-order BSH \
+       --shape-order $shape_order \
        --sequence-parallel \
        --log-interval 1 \
        --save-interval 10000 \
