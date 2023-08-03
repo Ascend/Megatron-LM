@@ -49,9 +49,9 @@ def DistributedOptimizerInit(self, optimizer, clip_grad, log_num_zeros_in_grad, 
         for dtype, grad_buffer in model._grad_buffers.items():
 
             # create NPU tensor with set_() instead of tensor.storage()._untyped()
-            param_buffer = torch.tensor(1, dtype=params_dtype, device=grad_buffer.data.device)
-            size = reduce(lambda x,y:x*y, grad_buffer.data.size())
-            param_buffer.set_(grad_buffer.data.storage(), 0, [size], [1])
+            param_buffer = torch.tensor(torch.flatten(grad_buffer.data),  # grad_buffer.data.storage()._untyped(),
+                            dtype=params_dtype,
+                            device=grad_buffer.data.device)
 
             param_buffer = param_buffer[:grad_buffer.numel_padded]
             current_param_buffers[dtype] = param_buffer
