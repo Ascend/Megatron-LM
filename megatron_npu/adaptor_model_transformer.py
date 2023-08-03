@@ -362,7 +362,7 @@ def ParallelAttentionForward(self, hidden_states, attention_mask,
         
         if self.shape_order == 'BSH':
             context_layer = torch.tensor(1.0).to(context_layer.dtype).npu() * context_layer
-        context_layer = rearrange(context_layer, 'b s D -> s b D').contiguous()
+            context_layer = rearrange(context_layer, 'b s D -> s b D').contiguous()
 
     # =================
     # Output. [sq, b, h]
