@@ -128,6 +128,8 @@ def _add_training_args(parser):
     group.add_argument('--shape-order', type=str, default='SBH',
                        choices=['SBH', 'BSH'],
                        help='input shape order used by Flash attention')
+    group.add_argument('--is-x-model', action='store_true',
+                       help='Enable imitate x model.')                   
     return parser
 
 megatron.arguments._add_training_args = _add_training_args

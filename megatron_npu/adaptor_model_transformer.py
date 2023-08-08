@@ -16,17 +16,62 @@ try:
 except ImportError:
     rearrange = None
 
+def ParallelMLPInit(self, init_method, output_layer_init_method):
+    super(ParallelMLP, self).__init__()
+    args = get_args()
+    self.is_x_model = args.is_x_model
+    
+    # Project to 4h.
+    self.dense_h_to_4h = tensor_parallel.ColumnParallelLinear(
+        args.hidden_size,
+        args.ffn_hidden_size,
+        gather_output=False,
+        init_method=init_method,
+        skip_bias_add=True,
+        async_tensor_model_parallel_allreduce=args.async_tensor_model_parallel_allreduce,
+        **_args_to_kwargs())
+    
+    self.bias_gelu_fusion = args.bias_gelu_fusion
+    self.activation_func = F.gelu
+    if args.openai_gelu:
+        self.activation_func = openai_gelu
+    elif args.onnx_safe:
+        self.activation_func = erf_gelu
+    
+    # Project back to h.
+    if self.is_x_model:
+        self.dense_4h_to_h = tensor_parallel.RowParallelLinear(
+            args.ffn_hidden_size // 2,
+            args.hidden_size,
+            input_is_parallel=True,
+            init_method=output_layer_init_method,
+            skip_bias_add=True,
+            **_args_to_kwargs())
+    else:
+        self.dense_4h_to_h = tensor_parallel.RowParallelLinear(
+                args.ffn_hidden_size,
+                args.hidden_size,
+                input_is_parallel=True,
+                init_method=output_layer_init_method,
+                skip_bias_add=True,
+                **_args_to_kwargs())
+                
 def ParallelMLPForward(self, hidden_states):
 
     # [s, b, 4hp]
     intermediate_parallel, bias_parallel = self.dense_h_to_4h(hidden_states)
 
-    if False:
-         intermediate_parallel = \
-                 bias_gelu_impl(intermediate_parallel, bias_parallel)
+    if self.is_x_model:
+        x = intermediate_parallel + bias_parallel
+        x, gates = x.chunk(2, dim=-1)
+        intermediate_parallel = x * F.gelu(gates)
     else:
-        intermediate_parallel = \
-            torch.fast_gelu(intermediate_parallel + bias_parallel)
+        if False:
+            intermediate_parallel = \
+                bias_gelu_impl(intermediate_parallel, bias_parallel)
+        else:
+            intermediate_parallel = \
+                torch.fast_gelu(intermediate_parallel + bias_parallel)
 
     # [s, b, h]
     output, output_bias = self.dense_4h_to_h(intermediate_parallel)
@@ -372,6 +417,7 @@ def ParallelAttentionForward(self, hidden_states, attention_mask,
 
     return output, bias
 
+megatron.model.transformer.ParallelMLP.__init__ = ParallelMLPInit
 megatron.model.transformer.ParallelMLP.forward = ParallelMLPForward
 megatron.model.transformer.CoreAttention.forward = CoreAttentionForward
 megatron.model.transformer.FlashSelfAttention = FlashSelfAttention
