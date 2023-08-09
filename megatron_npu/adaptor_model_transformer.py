@@ -7,7 +7,7 @@ from megatron.core import mpu, tensor_parallel
 from megatron.model.enums import AttnMaskType, ModelType, LayerType, AttnType
 from megatron.model.transformer import _args_to_kwargs
 from megatron.model.fused_bias_gelu import bias_gelu_impl
-from megatron.model.transformer import ParallelAttention, CoreAttention
+from megatron.model.transformer import ParallelAttention, CoreAttention, ParallelMLP
 import torch_npu
 
 
