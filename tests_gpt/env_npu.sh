@@ -44,6 +44,7 @@ export DYNAMIC_OP="ADD#MUL"
 export HCCL_WHITELIST_DISABLE=1
 #设置HCCL超时时间
 export HCCL_CONNECT_TIMEOUT=1200
+export INF_NAN_MODE_ENABLE=1
 ulimit -SHn 512000
 
 path_lib=$(python3.7 -c """
