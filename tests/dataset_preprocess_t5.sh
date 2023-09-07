@@ -30,13 +30,14 @@ find "$WIKI_DIR" -type f  -print0 |
 # Step4: Download Vocab and Do Preprocess
 wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-vocab.txt
 VOCAB=./bert-large-uncased-vocab.txt
-python3tools/preprocess_data.py \
+python3 ../tools/preprocess_data.py \
        --input $OUTDIR/wiki_all.json \
        --output-prefix $OUTDIR/my-t5 \
-       --vocab $VOCAB \
+       --vocab-file $VOCAB \
        --dataset-impl mmap \
        --tokenizer-type BertWordPieceLowerCase \
        --split-sentences \
+       --chunk-size 32 \
        --workers $(nproc)
 
 
