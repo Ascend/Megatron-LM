@@ -33,6 +33,9 @@ def clip_grad_norm_fp32(parameters, grads_for_norm, max_norm, norm_type=2, model
         for grad in grads_for_norm:
             grad_norm = torch.norm(grad, norm_type)
             total_norm += grad_norm ** norm_type
+        if not grads_for_norm:
+            grad_norm = torch.cuda.FloatTensor([0])
+            total_norm = grad_norm ** norm_type
 
         # Sum across all model-parallel GPUs.
         torch.distributed.all_reduce(total_norm, op=torch.distributed.ReduceOp.SUM, group=model_parallel_group)
