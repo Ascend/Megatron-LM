@@ -103,6 +103,9 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
 
 # 版本说明
 
+## 接口声明
+Megatron_npu以Monkey Patching技术替换Megatron原有函数实现，函数外观与Megatron保持一致，因此对于用户侧，只需 `import megatron_npu`，即可无感迁移模型代码。
+
 ## 变更
 
 2022.08.26：首次发布
