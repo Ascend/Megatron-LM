@@ -99,7 +99,45 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
 
    训练完成后，权重文件保存在./checkpoint下，并输出模型训练精度和性能信息。
 
+# GPT Evaluation
 
+## LAMBADA Cloze Accuracy
+
+1. 在test_gpt下，执行如下前置命令
+   ```
+   mv main.py ../../
+   mv ../../tasks/zeroshot_gpt ../../
+   ```
+2. 获取测评数据集
+   进入链接：https://github.com/cybertronai/bflm/blob/master/lambada_test.jsonl ，下载lambada_test.jsonl，重命名为lambada_test.json，放置在test_gpt下
+
+3. 运行原仓zeroshot评估样例（可跳过）
+   进入链接：https://catalog.ngc.nvidia.com/orgs/nvidia/models/megatron_lm_345m/files ，选择File Brower，下载release/mp_rank_00/model_optim_rng.pt，放置在checkpoint_dist_test/mp_rank_00/
+   执行样例脚本。
+   ```
+   bash test_gpt_distributed_sample.sh
+   ```
+
+4. 非大kernel zeroshot评估脚本
+   - 单机8卡测试
+     启动8卡测试。
+     ```
+     bash test_gpt_distributed.sh
+     ```
+
+5. bf16、fp16的大kernel zeroshot评估脚本
+   - 单机8卡测试
+     启动8卡测试。
+     ```
+     bash test_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=SBH #FP16 flash-attn SBH输入
+     bash test_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=BSH #FP16 flash-attn BSH输入
+     bash test_gpt_distributed_fp16.sh --pre=2048 --next=0 --shape_order=SBH #FP16 sparse-attn SBH输入
+     bash test_gpt_distributed_fp16.sh --pre=2048 --next=0 --shape_order=BSH #FP16 sparse-attn BSH输入
+     bash test_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=SBH #BF16 flash-attn SBH输入
+     bash test_gpt_distributed_bf16.sh --pre=65536 --next=65536 --shape_order=BSH #BF16 flash-attn BSH输入
+     bash test_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=SBH #BF16 sparse-attn SBH输入
+     bash test_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=BSH #BF16 sparse-attn BSH输入
+     ```
 
 # 版本说明
 
