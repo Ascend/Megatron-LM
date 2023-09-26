@@ -47,11 +47,10 @@ def DistributedOptimizerInit(self, optimizer, clip_grad, log_num_zeros_in_grad, 
     for model_index, model in enumerate(self.models):
         current_param_buffers = {}
         for dtype, grad_buffer in model._grad_buffers.items():
-
             # create NPU tensor with set_() instead of tensor.storage()._untyped()
             param_buffer = torch.tensor(torch.flatten(grad_buffer.data),  # grad_buffer.data.storage()._untyped(),
-                            dtype=params_dtype,
-                            device=grad_buffer.data.device)
+                                        dtype=params_dtype,
+                                        device=grad_buffer.data.device)
 
             param_buffer = param_buffer[:grad_buffer.numel_padded]
             current_param_buffers[dtype] = param_buffer
@@ -63,6 +62,7 @@ def DistributedOptimizerInit(self, optimizer, clip_grad, log_num_zeros_in_grad, 
     self.optimizer.param_groups = \
         [g["orig_group"] for g in self.opt_group_ranges]
     self.optimizer.load_state_dict(self.optimizer.state_dict())
+
 
 def build_model_and_main_param_groups(cls,
                                       model_gbuf_ranges,
@@ -169,6 +169,7 @@ def build_model_and_main_param_groups(cls,
         shard_fp32_groups,
         shard_fp32_from_float16_groups,
     )
+
 
 megatron.optimizer.distrib_optimizer.DistributedOptimizer.__init__ = DistributedOptimizerInit
 megatron.optimizer.distrib_optimizer.DistributedOptimizer.build_model_and_main_param_groups = build_model_and_main_param_groups

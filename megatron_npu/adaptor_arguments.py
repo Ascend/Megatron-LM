@@ -1,5 +1,6 @@
 import megatron
 
+
 def _add_training_args(parser):
     group = parser.add_argument_group(title='training')
 
@@ -129,7 +130,8 @@ def _add_training_args(parser):
                        choices=['SBH', 'BSH'],
                        help='input shape order used by Flash attention')
     group.add_argument('--is-x-model', action='store_true',
-                       help='Enable imitate x model.')                   
+                       help='Enable imitate x model.')
     return parser
+
 
 megatron.arguments._add_training_args = _add_training_args

@@ -9,8 +9,8 @@ from megatron.core.parallel_state import (
 
 from megatron.core.tensor_parallel.utils import VocabUtility
 
-def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_smoothing=0.0):
 
+def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_smoothing=0.0):
     # Maximum value along vocab dimension across all GPUs.
     logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
     torch.distributed.all_reduce(logits_max,
@@ -31,7 +31,7 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
     target_mask = (target < vocab_start_index) | (target >= vocab_end_index)
     masked_target = target.clone() - vocab_start_index
     masked_target *= ~target_mask
-    #masked_target[target_mask] = 0
+    # masked_target[target_mask] = 0
 
     # Get predicted-logits = logits[target].
     # For Simplicity, we convert logits to a 2-D tensor with size
@@ -44,7 +44,7 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
     predicted_logits_1d = predicted_logits_1d.clone().contiguous()
     predicted_logits = predicted_logits_1d.view_as(target)
     predicted_logits *= ~target_mask
-    #predicted_logits[target_mask] = 0.0
+    # predicted_logits[target_mask] = 0.0
     # All reduce is needed to get the chunks from other GPUs.
     torch.distributed.all_reduce(predicted_logits,
                                  op=torch.distributed.ReduceOp.SUM,
@@ -91,6 +91,7 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
 
     return loss
 
+
 def _VocabParallelCrossEntropyBackward(ctx, grad_output):
     # Retreive tensors from the forward path.
     softmax, target_mask, masked_target_1d = ctx.saved_tensors
@@ -120,6 +121,7 @@ def _VocabParallelCrossEntropyBackward(ctx, grad_output):
     grad_input.mul_(grad_output.unsqueeze(dim=-1))
 
     return grad_input, None, None
+
 
 megatron.core.tensor_parallel.cross_entropy._VocabParallelCrossEntropy.forward = _VocabParallelCrossEntropyForward
 megatron.core.tensor_parallel.cross_entropy._VocabParallelCrossEntropy.backward = _VocabParallelCrossEntropyBackward

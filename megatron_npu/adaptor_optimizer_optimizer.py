@@ -101,6 +101,7 @@ def adamw(params: List[Tensor],
                 out=(param.data, exp_avg, exp_avg_sq)
                 )
 
+
 class AdamW(Optimizer):
     r"""Implements AdamW algorithm.
     .. math::
@@ -260,6 +261,7 @@ def _unscale_main_grads_and_check_for_nan(self):
     torch.distributed.all_reduce(self.found_inf, op=torch.distributed.ReduceOp.MAX, group=mpu.get_data_parallel_group())
     found_inf_flag = (self.found_inf.item() > 0)
     return found_inf_flag
+
 
 def Float16OptimizerWithFloat16ParamsInit(self, optimizer, clip_grad, log_num_zeros_in_grad,
              params_have_main_grad, use_contiguous_buffers_in_local_ddp,

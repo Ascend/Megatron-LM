@@ -4,6 +4,7 @@ import torch
 import megatron
 from megatron.initialize import _warmup_jit_function
 
+
 def _compile_dependencies():
     if torch.distributed.get_rank() == 0:
         start_time = time.time()

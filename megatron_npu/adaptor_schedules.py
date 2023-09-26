@@ -8,13 +8,11 @@ from . import FLAG_SUPPORT_INF_NAN
 
 
 def clear_npu_overflow_flag():
-    # TODO: async operation and 1980B compatible adaptation
     float_status = torch.zeros(8).npu()
     result = torch.npu_clear_float_status(float_status)
 
 
 def get_npu_overflow_flag():
-    # TODO: async operation and 1980B compatible adaptation
     float_status = torch.zeros(8).npu()
     result = torch.npu_get_float_status(float_status)
     if float_status.cpu()[0] != 0:
@@ -24,7 +22,6 @@ def get_npu_overflow_flag():
 
 
 def set_npu_overflow_flag():
-    # TODO: async operation and 1980B compatible adaptation
     torch.tensor([65504]).half().npu() + 100
 
 
