@@ -43,7 +43,6 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
     predicted_logits_1d = predicted_logits_1d.clone().contiguous()
     predicted_logits = predicted_logits_1d.view_as(target)
     predicted_logits *= ~target_mask
-    # predicted_logits[target_mask] = 0.0
     # All reduce is needed to get the chunks from other GPUs.
     torch.distributed.all_reduce(predicted_logits,
                                  op=torch.distributed.ReduceOp.SUM,
