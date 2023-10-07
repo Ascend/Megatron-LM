@@ -96,8 +96,7 @@ def _add_training_args(parser):
                        help='Disable bias and dropout fusion.',
                        dest='bias_dropout_fusion')
     group.add_argument('--use-flash-attn', action='store_true',
-                       help='use FlashAttention implementation of attention. '
-                       'https://arxiv.org/abs/2205.14135')
+                       help='use FlashAttention implementation of attention. ')
     group.add_argument('--optimizer', type=str, default='adam',
                        choices=['adam', 'sgd'],
                        help='Optimizer function')

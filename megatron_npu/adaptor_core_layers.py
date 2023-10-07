@@ -12,7 +12,6 @@ def VocabParallelEmbeddingForward(self, input_):
         # Mask the input.
         masked_input = input_.clone() - self.vocab_start_index
         masked_input *= ~input_mask
-        # masked_input[input_mask] = 0
     else:
         masked_input = input_
         # Get the embeddings.
@@ -23,7 +22,6 @@ def VocabParallelEmbeddingForward(self, input_):
     # Mask the output embedding.
     if self.tensor_model_parallel_size > 1:
         output_parallel *= ~input_mask[..., None]
-        # output_parallel[input_mask, :] = 0.0
     # Reduce across all the model parallel GPUs.
     output = reduce_from_tensor_model_parallel_region(output_parallel)
     return output
