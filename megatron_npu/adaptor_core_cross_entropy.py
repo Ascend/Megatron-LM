@@ -9,8 +9,8 @@ from megatron.core.parallel_state import (
 
 from megatron.core.tensor_parallel.utils import VocabUtility
 
-def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_smoothing=0.0):
 
+def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_smoothing=0.0):
     # Maximum value along vocab dimension across all GPUs.
     logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
     torch.distributed.all_reduce(logits_max,
@@ -31,7 +31,6 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
     target_mask = (target < vocab_start_index) | (target >= vocab_end_index)
     masked_target = target.clone() - vocab_start_index
     masked_target *= ~target_mask
-    #masked_target[target_mask] = 0
 
     # Get predicted-logits = logits[target].
     # For Simplicity, we convert logits to a 2-D tensor with size
@@ -44,7 +43,6 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
     predicted_logits_1d = predicted_logits_1d.clone().contiguous()
     predicted_logits = predicted_logits_1d.view_as(target)
     predicted_logits *= ~target_mask
-    #predicted_logits[target_mask] = 0.0
     # All reduce is needed to get the chunks from other GPUs.
     torch.distributed.all_reduce(predicted_logits,
                                  op=torch.distributed.ReduceOp.SUM,
@@ -58,7 +56,6 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
                                  op=torch.distributed.ReduceOp.SUM,
                                  group=get_tensor_model_parallel_group())
 
-    # Loss = log(sum(exp(logits))) - predicted-logit.
     loss = torch.log(sum_exp_logits) - predicted_logits
 
     # Normalize and optionally smooth logits
@@ -73,7 +70,6 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
         = ((K - 1) * (1 - alpha) / (K - 1)) * y_gt + (alpha / (K - 1)) * \sum_{i != gt} y_i
         = (K * (1 - alpha) - 1) / (K - 1)) * y_gt  + (alpha / (K - 1)) * \sum_{i} y_i
         = (1 - (alpha * K) / (K - 1)) * y_gt + ( (alpha * K) / (K - 1) ) * \sum_{i} y_i / K
-        From: https://github.com/NVIDIA/NeMo/blob/main/nemo/collections/common/losses/smoothed_cross_entropy.py
         """
         assert 1.0 > label_smoothing > 0.0
         smoothing = label_smoothing * vocab_size / (vocab_size - 1)
@@ -90,6 +86,7 @@ def _VocabParallelCrossEntropyForward(ctx, vocab_parallel_logits, target, label_
     ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
 
     return loss
+
 
 def _VocabParallelCrossEntropyBackward(ctx, grad_output):
     # Retreive tensors from the forward path.
@@ -120,6 +117,7 @@ def _VocabParallelCrossEntropyBackward(ctx, grad_output):
     grad_input.mul_(grad_output.unsqueeze(dim=-1))
 
     return grad_input, None, None
+
 
 megatron.core.tensor_parallel.cross_entropy._VocabParallelCrossEntropy.forward = _VocabParallelCrossEntropyForward
 megatron.core.tensor_parallel.cross_entropy._VocabParallelCrossEntropy.backward = _VocabParallelCrossEntropyBackward

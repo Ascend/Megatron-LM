@@ -32,6 +32,7 @@ from . import adaptor_core_layers
 from . import adaptor_model_transformer
 from . import adaptor_arguments
 
+
 def wrapper_type(fn):
     @wraps(fn)
     def decorated(*args, **kwargs):

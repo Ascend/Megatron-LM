@@ -101,6 +101,7 @@ def adamw(params: List[Tensor],
                 out=(param.data, exp_avg, exp_avg_sq)
                 )
 
+
 class AdamW(Optimizer):
     r"""Implements AdamW algorithm.
     .. math::
@@ -151,10 +152,6 @@ class AdamW(Optimizer):
             (default: False)
         maximize (bool, optional): maximize the params based on the objective, instead of
             minimizing (default: False)
-    .. _Decoupled Weight Decay Regularization:
-        https://arxiv.org/abs/1711.05101
-    .. _On the Convergence of Adam and Beyond:
-        https://openreview.net/forum?id=ryQu7f-RZ
     """
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
@@ -261,6 +258,7 @@ def _unscale_main_grads_and_check_for_nan(self):
     found_inf_flag = (self.found_inf.item() > 0)
     return found_inf_flag
 
+
 def Float16OptimizerWithFloat16ParamsInit(self, optimizer, clip_grad, log_num_zeros_in_grad,
              params_have_main_grad, use_contiguous_buffers_in_local_ddp,
              fp16, bf16, params_dtype, grad_scaler, models):
@@ -330,7 +328,6 @@ def Float16OptimizerWithFloat16ParamsInit(self, optimizer, clip_grad, log_num_ze
         self.fp32_from_fp32_groups.append(fp32_params_this_group)
 
 
-# megatron.optimizer.Adam = torch.optim.AdamW
 megatron.optimizer.Adam = AdamW
 
 megatron.optimizer.optimizer.MixedPrecisionOptimizer._unscale_main_grads_and_check_for_nan = _unscale_main_grads_and_check_for_nan
