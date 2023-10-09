@@ -30,7 +30,7 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
   pip install -e .
   ```
 ### 2.4 安装其他依赖
-> 根据模型需求，按需添加所需依赖，并注意版本控制
+> 根据具体场景需求，**按需**添加所需依赖，并注意版本控制
 
   ```
   pip install -r requirements.txt
@@ -64,9 +64,9 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
    该模型支持单机单卡训练和单机8卡训练。
 
     - 单机8卡训练
-
+    
       启动8卡训练。
-
+    
       ```
       bash pretrain_gpt_distributed.sh
       ```
@@ -77,9 +77,9 @@ Megatron 是由 NVIDIA 的应用深度学习研究团队开发的一款功能强
    该模型支持单机单卡训练和单机8卡训练。
 
     - 单机8卡训练
-
+    
       启动8卡训练。
-
+    
       ```
       bash pretrain_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=SBH #FP16 flash-attn SBH输入
       bash pretrain_gpt_distributed_fp16.sh --pre=65536 --next=65536 --shape_order=BSH #FP16 flash-attn BSH输入
@@ -176,17 +176,17 @@ megatron_npu的示例脚本与说明文档含有部分公网地址，均为公�
 |       megatron.data.gpt_dataset._build_index_mappings        |                                         |      adaptor_data_gpt_dataset.py       |      |
 |               megatron.set_jit_fusion_options                |                                         |         adaptor_initialize.py          |      |
 | megatron.model.fused_layer_norm.MixedFusedLayerNorm.\__init__ |        MixedFusedLayerNorm初始化        |   adaptor_model_fused_layer_norm.py    |      |
-| megatron.model.fused_layer_norm.MixedFusedLayerNorm.forward  |                                         |   adaptor_model_fused_layer_norm.py    |      |
+| megatron.model.fused_layer_norm.MixedFusedLayerNorm.forward  |       MixedFusedLayerNorm前向计算       |   adaptor_model_fused_layer_norm.py    |      |
 | megatron.model.fused_softmax.FusedScaleMaskSoftmax.is_kernel_available |                                         |     adaptor_model_fused_softmax.py     |      |
 | megatron.model.fused_softmax.FusedScaleMaskSoftmax.forward_fused_softmax |                                         |     adaptor_model_fused_softmax.py     |      |
 |            megatron.model.module.fp32_to_float16             |               fp32转fp16                |        adaptor_model_module.py         |      |
 |            megatron.model.module.float16_to_fp32             |               fp16转fp32                |        adaptor_model_module.py         |      |
 |       megatron.model.transformer.ParallelMLP.\__init__       |            ParallelMLP初始化            |      adaptor_model_transformer.py      |      |
-|        megatron.model.transformer.ParallelMLP.forward        |                                         |      adaptor_model_transformer.py      |      |
-|       megatron.model.transformer.CoreAttention.forward       |                                         |      adaptor_model_transformer.py      |      |
-|        megatron.model.transformer.FlashSelfAttention         |                                         |      adaptor_model_transformer.py      |      |
+|        megatron.model.transformer.ParallelMLP.forward        |           ParallelMLP前向计算           |      adaptor_model_transformer.py      |      |
+|       megatron.model.transformer.CoreAttention.forward       |          CoreAttention前向计算          |      adaptor_model_transformer.py      |      |
+|        megatron.model.transformer.FlashSelfAttention         |         FlashSelfAttention对象          |      adaptor_model_transformer.py      |      |
 |    megatron.model.transformer.ParallelAttention.\__init__    |         ParallelAttention初始化         |      adaptor_model_transformer.py      |      |
-|     megatron.model.transformer.ParallelAttention.forward     |                                         |      adaptor_model_transformer.py      |      |
+|     megatron.model.transformer.ParallelAttention.forward     |        ParallelAttention前向计算        |      adaptor_model_transformer.py      |      |
 |                 megatron.clip_grad_norm_fp32                 |                                         |    adaptor_optimizer_clip_grads.py     |      |
 | megatron.optimizer.distrib_optimizer.DistributedOptimizer.\__init__ |       DistributedOptimizer初始化        | adaptor_optimizer_distrib_optimizer.py |      |
 | megatron.optimizer.distrib_optimizer.DistributedOptimizer.build_model_and_main_param_groups |                                         | adaptor_optimizer_distrib_optimizer.py |      |
