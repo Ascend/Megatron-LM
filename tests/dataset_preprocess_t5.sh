@@ -1,14 +1,4 @@
-# Step 1: Download enwiki
-wget https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2
-bzip2 -dk enwiki-latest-pages-articles.xml.bz2
-
-
-# Step 2: Download WikiExtractor
-pip3 install wikiextractor
-python3 -m wikiextractor.WikiExtractor enwiki-latest-pages-articles.xml --json
-
-
-# Step3: Concat json
+# Step1: Concat json
 WIKI_DIR=./text
 OUTDIR=./output
 
@@ -26,9 +16,7 @@ find "$WIKI_DIR" -type f  -print0 |
             cat $new_name >> $OUTDIR/wiki_all.json
     done
 
-
-# Step4: Download Vocab and Do Preprocess
-wget https://s3.amazonaws.com/models.huggingface.co/bert/bert-large-uncased-vocab.txt
+# Step2: Do Preprocess
 VOCAB=./bert-large-uncased-vocab.txt
 python3 ../tools/preprocess_data.py \
        --input $OUTDIR/wiki_all.json \
@@ -39,5 +27,3 @@ python3 ../tools/preprocess_data.py \
        --split-sentences \
        --chunk-size 32 \
        --workers $(nproc)
-
-
