@@ -59,7 +59,7 @@ python3 -m wikiextractor.WikiExtractor enwiki-latest-pages-articles.xml --json
    bash ./tests/dataset_preprocess_t5.sh
    ```
 ### 3.3 数据集目录结构
-   经过上述步骤，数据集默认放置在```./dataset/en_wiki```下，其目录结构与内容如下所示：
+   经过上述步骤处理后，数据集默认放置在```./dataset/en_wiki```下，其目录结构与内容如下所示：
 
    ```
    ├── ./dataset/en_wiki
