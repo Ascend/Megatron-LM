@@ -1,3 +1,4 @@
+import os
 import math
 import torch
 import torch.nn.functional as F
@@ -195,17 +196,30 @@ class FlashSelfAttention(torch.nn.Module):
         attention_mask = attention_mask.to(q.dtype)
 
         scale = 1.0 / math.sqrt(q.size(2) / n) if self.softmax_scale is None else self.softmax_scale
-
-        output = torch_npu.npu_flash_attention( \
-            q, k, v, n, self.shape_order, \
-            pse=None, \
-            padding_mask=None, \
-            atten_mask=attention_mask, \
-            scale=scale, \
-            pre_tockens=self.pre_tockens, \
-            next_tockens=self.next_tockens, \
-            keep_prob=1 - self.dropout_p, \
-            )[0]
+        
+        if eval(os.getenv("high_precision", "False")):
+            output = torch_npu.npu_fusion_attention( \
+                q, k, v, n, self.shape_order, \
+                pse=None, \
+                padding_mask=None, \
+                atten_mask=attention_mask, \
+                scale=scale, \
+                pre_tockens=self.pre_tockens, \
+                next_tockens=self.next_tockens, \
+                keep_prob=1 - self.dropout_p, \
+                inner_precise=0
+                )[0]
+        else:
+            output = torch_npu.npu_flash_attention( \
+                q, k, v, n, self.shape_order, \
+                pse=None, \
+                padding_mask=None, \
+                atten_mask=attention_mask, \
+                scale=scale, \
+                pre_tockens=self.pre_tockens, \
+                next_tockens=self.next_tockens, \
+                keep_prob=1 - self.dropout_p, \
+                )[0]
 
         return output
 
