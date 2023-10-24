@@ -197,7 +197,7 @@ class FlashSelfAttention(torch.nn.Module):
 
         scale = 1.0 / math.sqrt(q.size(2) / n) if self.softmax_scale is None else self.softmax_scale
         
-        if eval(os.getenv("high_precision", "False")):
+        if os.getenv('high_precision', 'False').lower() in ['true', '1']:
             output = torch_npu.npu_fusion_attention( \
                 q, k, v, n, self.shape_order, \
                 pse=None, \
