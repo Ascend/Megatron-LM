@@ -77,7 +77,5 @@ for index in range(len(sys.path)):
 print(result)"""
 )
 
-echo ${path_lib}
-
 export LD_LIBRARY_PATH=/usr/local/python3.7.5/lib/:${path_lib}:$LD_LIBRARY_PATH
 export PYTHONPATH=$PYTHONPATH:./Megatron-LM

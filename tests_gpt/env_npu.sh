@@ -64,8 +64,6 @@ for index in range(len(sys.path)):
 print(result)"""
 )
 
-echo ${path_lib}
-
 export LD_LIBRARY_PATH=/usr/local/python3.7.5/lib/:${path_lib}:$LD_LIBRARY_PATH
 export HCCL_WHITELIST_DISABLE=1
 #export HCCL_IF_IP=$(hostname -I |awk '{print $1}')
