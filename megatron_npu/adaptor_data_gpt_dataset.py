@@ -83,7 +83,8 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
             start_time = time.time()
             doc_idx = _build_doc_idx(documents, num_epochs, np_rng,
                                      separate_last_epoch)
-            np.save(doc_idx_filename, doc_idx, allow_pickle=True)
+            np.save(doc_idx_filename, doc_idx, allow_pickle=False)
+            os.chmod(doc_idx_filename, 644)
             print_rank_0(' > elasped time to build and save doc-idx mapping '
                          '(seconds): {:4f}'.format(time.time() - start_time))
             # sample-idx.
@@ -95,7 +96,8 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
             assert sizes.dtype == np.int32
             sample_idx = helpers.build_sample_idx(sizes, doc_idx, seq_length,
                                                   num_epochs, tokens_per_epoch)
-            np.save(sample_idx_filename, sample_idx, allow_pickle=True)
+            np.save(sample_idx_filename, sample_idx, allow_pickle=False)
+            os.chmod(sample_idx_filename, 644)
             print_rank_0(' > elasped time to build and save sample-idx mapping '
                          '(seconds): {:4f}'.format(time.time() - start_time))
             # shuffle-idx.
@@ -108,7 +110,8 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
                 num_samples_ = sample_idx.shape[0] - 1
             shuffle_idx = _build_shuffle_idx(num_samples_,
                                              sample_idx.shape[0] - 1, np_rng)
-            np.save(shuffle_idx_filename, shuffle_idx, allow_pickle=True)
+            np.save(shuffle_idx_filename, shuffle_idx, allow_pickle=False)
+            os.chmod(shuffle_idx_filename, 644)
             print_rank_0(' > elasped time to build and save shuffle-idx mapping'
                          ' (seconds): {:4f}'.format(time.time() - start_time))
 
@@ -125,14 +128,14 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
     # Load mappings.
     start_time = time.time()
     print_rank_0(' > loading doc-idx mapping from {}'.format(
-        doc_idx_filename))
-    doc_idx = np.load(doc_idx_filename, allow_pickle=True, mmap_mode='r')
+        os.path.basename(doc_idx_filename)))
+    doc_idx = np.load(doc_idx_filename, allow_pickle=False, mmap_mode='r')
     print_rank_0(' > loading sample-idx mapping from {}'.format(
-        sample_idx_filename))
-    sample_idx = np.load(sample_idx_filename, allow_pickle=True, mmap_mode='r')
+        os.path.basename(sample_idx_filename)))
+    sample_idx = np.load(sample_idx_filename, allow_pickle=False, mmap_mode='r')
     print_rank_0(' > loading shuffle-idx mapping from {}'.format(
-        shuffle_idx_filename))
-    shuffle_idx = np.load(shuffle_idx_filename, allow_pickle=True, mmap_mode='r')
+        os.path.basename(shuffle_idx_filename)))
+    shuffle_idx = np.load(shuffle_idx_filename, allow_pickle=False, mmap_mode='r')
     print_rank_0('    loaded indexed file in {:3.3f} seconds'.format(
         time.time() - start_time))
     print_rank_0('    total number of samples: {}'.format(
