@@ -193,7 +193,6 @@ class FlashSelfAttention(torch.nn.Module):
         self.shape_order = shape_order
 
     def forward(self, q, k, v, n, attention_mask):
-        attention_mask = attention_mask.to(q.dtype)
 
         scale = 1.0 / math.sqrt(q.size(2) / n) if self.softmax_scale is None else self.softmax_scale
         
