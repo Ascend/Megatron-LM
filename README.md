@@ -11,7 +11,7 @@ Megatron-LM 是由 NVIDIA 的应用深度学习研究团队开发的一款功能
 - 分布式优化器（Distributed optimizer）
 
 ## 2 环境准备
-> 建议您以非root的安全账户执行脚本，以避免安全风险。
+> 基于安全性考虑，建议您以非root的安全账户执行脚本。
 ### 2.1 Pytorch框架训练环境准备
 请参考昇腾官方文档《[Pytorch框架训练环境准备](https://www.hiascend.com/document/detail/zh/ModelZoo/pytorchframework/ptes)》。建议您在准备好模型训练环境以后，将umask调整为`027`或以上。
 
@@ -32,6 +32,7 @@ Megatron-LM 是由 NVIDIA 的应用深度学习研究团队开发的一款功能
   cd megatron_npu
   pip install -e .
   ```
+> 如需要保存安装日志，可在pip install命令后面加上参数 `--log <PATH>`，并对您指定的目录`<PATH>`做好权限管控。
 ### 2.4 安装其他依赖
   ```shell
   pip install -r requirements.txt
@@ -179,7 +180,7 @@ bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=BSH #BF1
 - 建议您务必对模型训练相关文件（如数据集、配置文件、源代码、checkpoint等）做好权限管理，避免文件被恶意篡改、破坏业务进行等风险，比如可以控制为同组/其他用户仅有只读权限。
 - 原生megatron以及torch框架执行中所生成的文件权限受到linux系统umask参数影响，如umask设置为`027`，其目录/文件权限默认为`750`/`640`，您可进一步管理权限。
 #### 关于命令执行
-建议您在执行任何命令时，都使用非root账户执行，遵循权限最小化原则。
+基于安全性考虑，建议您在执行任何命令时，都尽量使用非root账户执行，遵循权限最小化原则。
 
 #### 关于资源使用
 
@@ -195,7 +196,7 @@ bash pretrain_gpt_distributed_bf16.sh --pre=2048 --next=0 --shape_order=BSH #BF1
 
 #### 关于网络端口
 
-megatron_npu不主动开放端口，对于原生Megatron和Pytorch开放的相关端口，您可以参考其官方文档进行设置。在单机训练的情况下，不建议开放全局端口。
+megatron_npu不主动开放端口，对于原生Pytorch开放的相关端口，您可以参考其官方文档进行设置。在单机训练的情况下，不建议开放全局端口。具体的通信矩阵可以参考[附录D 通信矩阵](#d-通信矩阵)。
 
 #### 关于算子编译
 
@@ -207,6 +208,16 @@ megatron_npu不涉及C++算子编译。
 #### 关于公网地址
 
 megatron_npu的示例脚本含有公网地址，为公开LICENSE的地址，具体请参考[附录B 公网地址说明](#b-公网地址说明)。
+
+### 6.4 关于卸载
+
+- Pytorch框架训练环境的卸载可以参考[昇腾官方文档](https://www.hiascend.com/document/detail/zh/ModelZoo/pytorchframework/ptes/ptes_00032.html)。
+
+- megatron_npu的卸载只需执行命令：
+
+  ```python
+  pip uninstall megatron_npu
+  ```
 
 
 
@@ -265,3 +276,13 @@ megatron_npu的示例脚本含有公网地址，为公开LICENSE的地址，具�
 |       运行生成文件        | `640` (rw-r-----) |      如checkpoint、数据集预处理npy文件等就属于生成文件       |
 |     不可执行程序文件      | `440` (r--r-----) | 一般程序文件不应修改，如果需要进行开发，您可酌情调整为`640`  |
 | 程序目录 / 可执行程序文件 | `550` (r-xr-x---) | 一般程序目录/可执行程序不应修改，如果需要进行开发，您可酌情调整为`750` |
+
+### D-通信矩阵
+
+|           源设备            |    源IP    |                            源端口                            |          目的设备           |   目的IP   |                       目的端口（侦听）                       | 协议 |                           端口说明                           |                             备注                             |
+| :-------------------------: | :--------: | :----------------------------------------------------------: | :-------------------------: | :--------: | :----------------------------------------------------------: | :--: | :----------------------------------------------------------: | :----------------------------------------------------------: |
+| 运行torch_npu进程的计算设备 | 设备地址IP | 操作系统自动分配，分配范围由操作系统决定，如ubuntu是采用`/proc/sys/net/ipv4_local_port_range`文件指定 | 运行torch_npu进程的计算设备 | 设备地址IP | 当用户不使用**测试示例脚本**，则默认29500/29400。用户可调用`torch.distributed.launch`函数，通过传入的`--master_port`自由指定1024-65535之间未被占用的端口 | TCP  | 源端口与目的端口均用于收发数据。对于静态分布式场景（backend=static）默认端口为29400；对于动态分布式场景（backend=c10d）中默认端口29500 | megatron_npu本身不开启端口，该通信过程由开源软件Pytorch控制，配置方式可参考其官方文档：https://pytorch.org/docs/stable/distributed.html#launch-utility |
+| 运行torch_npu进程的计算设备 | 设备地址IP | 操作系统自动分配，分配范围由操作系统决定，如ubuntu是采用`/proc/sys/net/ipv4_local_port_range`文件指定 | 运行torch_npu进程的计算设备 | 设备地址IP | 当使用`pretrain_gpt_distributed*`系列测试示例脚本，脚本对`torch.distributed.launch`传入的`--master_port`为**6000**，用户可以自由指定1024-65535之间未被占用的端口 | TCP  | 原生Pytorch（调用`torchrun`、`torch.distributed.launch`）通信需要，用于收发数据 | 和第一条记录所述为同一端口，这里特别说明**测试示例脚本**对Pytorch开启的master_port默认配置为6000 |
+| 运行torch_npu进程的计算设备 | 设备地址IP | 操作系统自动分配，分配范围由操作系统决定，如ubuntu是采用`/proc/sys/net/ipv4_local_port_range`文件指定 | 运行torch_npu进程的计算设备 | 设备地址IP | 当使用`test_gpt_distributed*`系列测试示例脚本，脚本对`torch.distributed.launch`传入的`--master_port`为**60035**，用户可以自由指定1024-65535之间未被占用的端口 | TCP  | 原生Pytorch（调用`torchrun`、`torch.distributed.launch`）通信需要，用于收发数据 | 和第一条记录所述为同一端口，这里特别说明**测试示例脚本**对Pytorch开启的master_port默认配置为60035 |
+| 运行torch_npu进程的计算设备 | 设备地址IP |                  请参见备注中的CANN官方文档                  | 运行torch_npu进程的计算设备 | 设备地址IP |                  请参见备注中的CANN官方文档                  | TCP  |                  请参见备注中的CANN官方文档                  | 该通信过程完全由HCCL组件控制，端口范围可参考文档：https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/700alpha001/ref/envref/envref_07_0065.html CANN通信文档：https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/700alpha001/ref/hcclapiref/hcclapi_07_0001.html |
+
