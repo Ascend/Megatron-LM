@@ -28,10 +28,10 @@ Megatron-LM 是由 NVIDIA 的应用深度学习研究团队开发的一款功能
 
   ```shell
   git clone https://gitee.com/ascend/Megatron-LM.git megatron_npu_adaptor
-  cd megatron_npu
+  cd megatron_npu_adaptor
   pip install -e .
   ```
-> 如需要保存安装日志，可在pip install命令后面加上参数 `--log <PATH>`，并对您指定的目录`<PATH>`做好权限管控。
+> 如需要保存安装megatron_npu的日志，可在pip install命令后面添加参数 `--log <PATH>`，并对您指定的路径`<PATH>`做好权限管控。
 ### 2.4 安装其他依赖
   ```shell
   pip install -r requirements.txt
@@ -216,6 +216,8 @@ megatron_npu的示例脚本含有公网地址，为公开LICENSE的地址，具�
 
 - megatron_npu的卸载只需执行命令：
 
+  > 如需要保存卸载megatron_npu的日志，可在pip uninstall命令后面添加参数 `--log <PATH>`，并对您指定的路径`<PATH>`做好权限管控。
+  
   ```python
   pip uninstall megatron_npu
   ```
