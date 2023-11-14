@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import megatron_npu
 import torch
 if torch.__version__>="1.8.0":
     try:
@@ -23,8 +24,8 @@ if torch.__version__>="1.8.0":
         print('WARNING! torch_npu is not imported.. Please using without npu..')
 from commons import print_separator
 from commons import initialize_distributed
-from megatron.mpu import data as data_utils
-from megatron import mpu
+from megatron.core.tensor_parallel import data as data_utils
+from megatron.core import parallel_state
 import functools
 import operator
 import sys
@@ -36,9 +37,9 @@ def test_broadcast_data(tensor_model_parallel_size):
         print('> testing broadcast_data with model parallel size {} ...'.
               format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    torch.manual_seed(1234 + mpu.get_data_parallel_rank())
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    torch.manual_seed(1234 + parallel_state.get_data_parallel_rank())
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     key_size_t = {'key1': [7, 11],
                   'key2': [8, 2, 1],
@@ -54,7 +55,7 @@ def test_broadcast_data(tensor_model_parallel_size):
         data_t[key] = data[key].clone()
     data['keyX'] = torch.FloatTensor(size=(5, )).random_(0, 1000)
     data_t['keyX'] = data['keyX'].clone()
-    if mpu.get_tensor_model_parallel_rank() != 0:
+    if parallel_state.get_tensor_model_parallel_rank() != 0:
         data = None
 
     data_utils._check_data_types(keys, data_t, torch.int64)
@@ -75,7 +76,7 @@ def test_broadcast_data(tensor_model_parallel_size):
         assert data_b[key].sub(tensor).abs().max() == 0
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
