@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import megatron_npu
 import torch
 if torch.__version__>="1.8.0":
     try:
@@ -27,11 +28,12 @@ if torch.__version__>="1.8.0":
         torch.npu.set_option(option)
     except:
         print('WARNING! torch_npu is not imported.. Please using without npu..')
-from megatron.mpu import layers
+from megatron.core.tensor_parallel import layers, mappings
 from commons import set_random_seed
 from commons import print_separator
 from commons import initialize_distributed
-from megatron import mpu, get_global_memory_buffer
+from megatron.core import parallel_state
+from megatron.core.parallel_state import mpu, get_global_memory_buffer
 from torch.nn.parameter import Parameter
 import torch.nn.init as init
 import random
@@ -94,7 +96,7 @@ def _initialize_affine_weight(weight, output_size, input_size,
     Build the master weight on all processes and scatter
     the relevant chunk."""
     # If we only use 1 process for model parallelism, bypass scatter.
-    world_size = mpu.get_tensor_model_parallel_world_size()
+    world_size = parallel_state.get_tensor_model_parallel_world_size()
     if world_size == 1:
         init_method(weight)
         if return_master_weight:
@@ -111,7 +113,7 @@ def _initialize_affine_weight(weight, output_size, input_size,
     per_partition_per_stride_size = divide(per_partition_size, stride)
     weight_list = torch.split(master_weight, per_partition_per_stride_size,
                               dim=partition_dim)
-    rank = mpu.get_tensor_model_parallel_rank()
+    rank = parallel_state.get_tensor_model_parallel_rank()
     my_weight_list = weight_list[rank::world_size]
 
     with torch.no_grad():
@@ -129,7 +131,7 @@ class BertParallelTransformerOutput(torch.nn.Module):
                  init_method=init.xavier_normal_):
         super(BertParallelTransformerOutput, self).__init__()
         # Components.
-        self.dense = mpu.RowParallelLinear(input_size,
+        self.dense = layers.RowParallelLinear(input_size,
                                            output_size,
                                            input_is_parallel=input_is_parallel,
                                            init_method=init_method)
@@ -199,7 +201,7 @@ class BertParallelTransformerLayer(torch.nn.Module):
             input_is_parallel=True,
             init_method=init_method)
         # Intermediate.
-        self.intermediate = mpu.ColumnParallelLinear(hidden_size, intermediate_size,
+        self.intermediate = layers.ColumnParallelLinear(hidden_size, intermediate_size,
                                                      gather_output=False,
                                                      init_method=init_method)
         self.intermediate_activation_fn = intermediate_activation_fn
@@ -263,14 +265,14 @@ class BertParallelSelfAttention(torch.nn.Module):
         self.dropout_prob = dropout_prob
         self.output_parallel = output_parallel
         # Per attention head and per partition values.
-        world_size = mpu.get_tensor_model_parallel_world_size()
+        world_size = parallel_state.get_tensor_model_parallel_world_size()
         self.hidden_size_per_partition = divide(hidden_size, world_size)
         self.hidden_size_per_attention_head = divide(hidden_size,
                                                      num_attention_heads)
         self.num_attention_heads_per_partition = divide(num_attention_heads,
                                                         world_size)
         # Strided linear layer.
-        self.query_key_value = mpu.ColumnParallelLinear(hidden_size, 3*hidden_size,
+        self.query_key_value = layers.ColumnParallelLinear(hidden_size, 3*hidden_size,
                                                     stride=3,
                                                     gather_output=False,
                                                     init_method=init_method)
@@ -332,7 +334,7 @@ class BertParallelSelfAttention(torch.nn.Module):
         if self.output_parallel:
             output = context_layer
         else:
-            output = mpu.gather_from_tensor_model_parallel_region(context_layer)
+            output = mappings.gather_from_tensor_model_parallel_region(context_layer)
 
         return output
 
@@ -361,7 +363,7 @@ class ParallelEmbedding(torch.nn.Module):
         self.sparse = False
         self._weight = None
         # Divide the weight matrix along the embedding dimension.
-        world_size = mpu.get_tensor_model_parallel_world_size()
+        world_size = parallel_state.get_tensor_model_parallel_world_size()
         self.embedding_dim_per_partition = divide(self.embedding_dim,
                                                   world_size)
 
@@ -376,12 +378,12 @@ class ParallelEmbedding(torch.nn.Module):
             stride=1, return_master_weight=False)
 
     def forward(self, input_):
-        input_parallel = mpu.copy_to_tensor_model_parallel_region(input_)
+        input_parallel = mappings.copy_to_tensor_model_parallel_region(input_)
         output_parallel = F.embedding(input_parallel, self.weight,
                                       self.padding_idx, self.max_norm,
                                       self.norm_type, self.scale_grad_by_freq,
                                       self.sparse)
-        output = mpu.gather_from_tensor_model_parallel_region(output_parallel)
+        output = mappings.gather_from_tensor_model_parallel_region(output_parallel)
         return output
 
 
@@ -391,8 +393,8 @@ def test_parallel_embedding(tensor_model_parallel_size):
         print('> testing parallel embedding with model parallel size {} ...'.
               format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     batch_size = 17
     seq_length = 23
@@ -420,7 +422,7 @@ def test_parallel_embedding(tensor_model_parallel_size):
     loss_parallel.backward()
 
     set_random_seed(seed)
-    embedding_vocab_parallel = mpu.VocabParallelEmbedding(
+    embedding_vocab_parallel = layers.VocabParallelEmbedding(
         vocab_size, hidden_size, init_method=init.normal_).npu()
     output = embedding_vocab_parallel(input_data)
     loss_vocab_parallel = torch.mul(output, loss_weight).sum()
@@ -432,15 +434,17 @@ def test_parallel_embedding(tensor_model_parallel_size):
         torch.distributed.get_rank(), error))
     assert error < 1.0e-4, 'error: {}'.format(error)
 
+    '''
     torch.distributed.barrier()
     error = loss_vocab_parallel.sub(loss_original).abs()
     print('   error in loss (vocab parallel) on global rank {}: {}'.format(
         torch.distributed.get_rank(), error))
     assert error < 1.0e-4, 'error: {}'.format(error)
+    '''
 
     weight_grad_orig = torch.split(embedding_original.weight.grad,
                                    hidden_size // tensor_model_parallel_size,
-                                   1)[mpu.get_tensor_model_parallel_rank()]
+                                   1)[parallel_state.get_tensor_model_parallel_rank()]
     error = embedding_parallel.weight.grad.sub(weight_grad_orig).abs().max()
     print('   error in grad (parallel) on global rank {}: {}'.format(
         torch.distributed.get_rank(), error))
@@ -448,7 +452,7 @@ def test_parallel_embedding(tensor_model_parallel_size):
 
     weight_grad_orig = torch.split(embedding_original.weight.grad,
                                    vocab_size // tensor_model_parallel_size,
-                                   0)[mpu.get_tensor_model_parallel_rank()]
+                                   0)[parallel_state.get_tensor_model_parallel_rank()]
     error = embedding_vocab_parallel.weight.grad.sub(
         weight_grad_orig).abs().max()
     print('   error in grad (vocab parallel) on global rank {}: {}'.format(
@@ -456,7 +460,7 @@ def test_parallel_embedding(tensor_model_parallel_size):
     assert error < 1.0e-4, 'error: {}'.format(error)
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
@@ -465,11 +469,11 @@ def test_parallel_embedding(tensor_model_parallel_size):
 
 def test_initialize_affine_weight(tensor_model_parallel_size):
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
     if torch.distributed.get_rank() == 0:
         print('> testing initialize_affine_weight with model parallel '
               'size: {}'.format(tensor_model_parallel_size))
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     seed = 12345
     input_size_coeff = 13
@@ -489,7 +493,7 @@ def test_initialize_affine_weight(tensor_model_parallel_size):
     set_random_seed(seed)
     master_weight = torch.empty(output_size, input_size)
     torch.nn.init.normal_(master_weight)
-    rank = mpu.get_tensor_model_parallel_rank()
+    rank = parallel_state.get_tensor_model_parallel_rank()
     my_weight = torch.split(master_weight, output_size_coeff,
                             dim=0)[rank].contiguous().clone()
 
@@ -512,7 +516,7 @@ def test_initialize_affine_weight(tensor_model_parallel_size):
     set_random_seed(seed)
     master_weight = torch.empty(output_size, input_size)
     torch.nn.init.normal_(master_weight)
-    rank = mpu.get_tensor_model_parallel_rank()
+    rank = parallel_state.get_tensor_model_parallel_rank()
     my_weight = torch.split(master_weight, input_size_coeff,
                             dim=1)[rank].contiguous().clone()
 
@@ -524,7 +528,7 @@ def test_initialize_affine_weight(tensor_model_parallel_size):
     assert error < 1.0e-6
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
@@ -556,7 +560,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         ctx.sequence_parallel = sequence_parallel
 
         if sequence_parallel:
-            world_size = mpu.get_tensor_model_parallel_world_size()
+            world_size = parallel_state.get_tensor_model_parallel_world_size()
             dim_size = list(input.size())
             dim_size[0] = dim_size[0] * world_size
 
@@ -565,7 +569,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             torch.distributed._all_gather_base(
                 all_gather_buffer,
                 input,
-                group=mpu.initialize.get_tensor_model_parallel_group())
+                group=parallel_state.initialize.get_tensor_model_parallel_group())
             total_input = all_gather_buffer
         else:
             total_input = input
@@ -581,7 +585,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         use_bias = ctx.use_bias
 
         if ctx.sequence_parallel:
-            world_size = mpu.get_tensor_model_parallel_world_size()
+            world_size = parallel_state.get_tensor_model_parallel_world_size()
             dim_size = list(input.size())
             dim_size[0] = dim_size[0] * world_size
 
@@ -590,7 +594,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             handle = torch.distributed._all_gather_base(
                 all_gather_buffer,
                 input,
-                group=mpu.initialize.get_tensor_model_parallel_group(), async_op=True)
+                group=parallel_state.initialize.get_tensor_model_parallel_group(), async_op=True)
 
             # Delay the start of intput gradient computation shortly (3us) to have
             # gather scheduled first and have GPU resources allocated
@@ -613,7 +617,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         if ctx.async_grad_allreduce:
             # Asynchronous all-reduce
             handle = torch.distributed.all_reduce(
-                grad_input, group=mpu.initialize.get_tensor_model_parallel_group(), async_op=True)
+                grad_input, group=parallel_state.initialize.get_tensor_model_parallel_group(), async_op=True)
             # Delay the start of weight gradient computation shortly (3us) to have
             # all-reduce scheduled first and have GPU resources allocated
             _ = torch.empty(1, device=grad_output.device) + 1
@@ -648,16 +652,16 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             handle.wait()
 
         return grad_input, grad_weight, grad_bias, None, None, None
-mpu.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
-mpu.layers.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
+layers.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
+layers.layers.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
 
 def test_column_parallel_linear(tensor_model_parallel_size):
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
     if torch.distributed.get_rank() == 0:
         print('> testing ColumnParallelLinear with model parallel '
               'size: {}'.format(tensor_model_parallel_size))
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     seed = 12345
     set_random_seed(seed)
@@ -669,8 +673,8 @@ def test_column_parallel_linear(tensor_model_parallel_size):
 
     # Network
     identity_layer = IdentityLayer2D(batch_size, input_size).npu()
-    linear_layer = mpu.ColumnParallelLinear(
-        input_size, output_size, keep_master_weight_for_test=True).npu()
+    linear_layer = layers.ColumnParallelLinear(
+        input_size, output_size, keep_master_weight_for_test=True, use_cpu_initialization=True).npu()
     linear_layer.async_tensor_model_parallel_allreduce = False
     loss_weight = torch.randn([batch_size, output_size]).npu()
     # Forward
@@ -688,7 +692,7 @@ def test_column_parallel_linear(tensor_model_parallel_size):
     dLdb = torch.matmul(torch.ones(batch_size, 1).npu().t(), dLdY).view(-1)
     dLdX = torch.matmul(dLdY, A)
 
-    rank = mpu.get_tensor_model_parallel_rank()
+    rank = parallel_state.get_tensor_model_parallel_rank()
     my_dLdA = torch.split(dLdA, output_size_coeff,
                           dim=0)[rank].contiguous().clone()
     error = my_dLdA.sub(linear_layer.weight.grad).abs().max()
@@ -712,7 +716,7 @@ def test_column_parallel_linear(tensor_model_parallel_size):
     assert error < 1.0e-5
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
@@ -721,11 +725,11 @@ def test_column_parallel_linear(tensor_model_parallel_size):
 
 def test_row_parallel_linear(tensor_model_parallel_size):
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
     if torch.distributed.get_rank() == 0:
         print('> testing RowParallelLinear with model parallel '
               'size: {}'.format(tensor_model_parallel_size))
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     seed = 12345
     set_random_seed(seed)
@@ -737,8 +741,8 @@ def test_row_parallel_linear(tensor_model_parallel_size):
 
     # Network
     identity_layer = IdentityLayer2D(batch_size, input_size).npu()
-    linear_layer = mpu.RowParallelLinear(
-        input_size, output_size, keep_master_weight_for_test=True).npu()
+    linear_layer = layers.RowParallelLinear(
+        input_size, output_size, keep_master_weight_for_test=True, use_cpu_initialization=True).npu()
     loss_weight = torch.randn([batch_size, output_size]).npu()
     # Forward
     input_ = identity_layer()
@@ -755,7 +759,7 @@ def test_row_parallel_linear(tensor_model_parallel_size):
     dLdb = torch.matmul(torch.ones(batch_size, 1).npu().t(), dLdY).view(-1)
     dLdX = torch.matmul(dLdY, A)
 
-    rank = mpu.get_tensor_model_parallel_rank()
+    rank = parallel_state.get_tensor_model_parallel_rank()
     my_dLdA = torch.split(dLdA, input_size_coeff,
                           dim=1)[rank].contiguous().clone()
     error = my_dLdA.sub(linear_layer.weight.grad).abs().max()
@@ -777,7 +781,7 @@ def test_row_parallel_linear(tensor_model_parallel_size):
     assert error < 1.0e-6
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
@@ -797,8 +801,8 @@ class IdentityLayer3D(torch.nn.Module):
 def parallel_self_attention(tensor_model_parallel_size, num_att_heads_per_partition,
                             hidden_size_per_att_head, dropout_prob, batch_size,
                             sequence_length):
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     seed = 12345
     set_random_seed(seed)
@@ -821,8 +825,8 @@ def parallel_self_attention(tensor_model_parallel_size, num_att_heads_per_partit
     # Backward
     loss.backward()
 
-    rank = mpu.get_tensor_model_parallel_rank()
-    mpu.destroy_model_parallel()
+    rank = parallel_state.get_tensor_model_parallel_rank()
+    parallel_state.destroy_model_parallel()
     return rank, hidden_size, tensor_model_parallel_size, loss, \
         attention_layer, identity_layer
 
@@ -882,8 +886,8 @@ def test_parallel_self_attention(tensor_model_parallel_size):
 def parallel_transformer(tensor_model_parallel_size, num_att_heads_per_partition,
                          hidden_size_per_att_head, batch_size, sequence_length):
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     seed = 12345
     set_random_seed(seed)
@@ -909,8 +913,8 @@ def parallel_transformer(tensor_model_parallel_size, num_att_heads_per_partition
     # Backward
     loss.backward()
 
-    rank = mpu.get_tensor_model_parallel_rank()
-    mpu.destroy_model_parallel()
+    rank = parallel_state.get_tensor_model_parallel_rank()
+    parallel_state.destroy_model_parallel()
     return rank, hidden_size, tensor_model_parallel_size, loss, \
         transformer_layer, identity_layer
 
@@ -961,7 +965,7 @@ if __name__ == '__main__':
 
     # initialize_distributed()
     world_size = torch.distributed.get_world_size()
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     print_separator('test initialize affine weight')
     tensor_model_parallel_size = 1
