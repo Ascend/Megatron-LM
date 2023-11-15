@@ -25,7 +25,12 @@ msnpureport -g error -d 7
 
 #关闭Device侧Event日志
 msnpureport -e disable
-
+# 计算通信并行，1关闭/2/4/8
+export CC_PARALLEL_NUM=4
+# 开启FFTS+
+export HCCL_OP_BASE_FFTS_MODE_ENABLE=TRUE
+# 开启多流内存复用
+export MULTI_STREAM_MEMORY_REUSE=1
 #将Host日志输出到串口,0-关闭/1-开启
 export ASCEND_SLOG_PRINT_TO_STDOUT=0
 #设置默认日志级别,0-debug/1-info/2-warning/3-error

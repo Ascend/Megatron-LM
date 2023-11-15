@@ -15,6 +15,7 @@ sys.modules['amp_C'] = __import__('megatron_npu.adaptor_amp_c')
 global FLAG_SUPPORT_INF_NAN
 FLAG_SUPPORT_INF_NAN = hasattr(torch_npu.npu.utils, 'is_support_inf_nan') and torch_npu.npu.utils.is_support_inf_nan()
 
+from . import adaptor_min_comm
 from . import adaptor_core_tensor_parallel
 from . import adaptor_core_utils
 from . import adaptor_data_gpt_dataset
@@ -31,7 +32,6 @@ from . import adaptor_core_cross_entropy
 from . import adaptor_core_layers
 from . import adaptor_model_transformer
 from . import adaptor_arguments
-
 
 def wrapper_type(fn):
     @wraps(fn)
