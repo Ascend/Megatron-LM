@@ -33,7 +33,7 @@ from commons import set_random_seed
 from commons import print_separator
 from commons import initialize_distributed
 from megatron.core import parallel_state
-from megatron.core.parallel_state import mpu, get_global_memory_buffer
+from megatron.core.parallel_state import get_global_memory_buffer
 from torch.nn.parameter import Parameter
 import torch.nn.init as init
 import random
@@ -43,16 +43,6 @@ import math
 import torch.nn.functional as F
 from megatron.initialize import initialize_megatron
 
-initialize_megatron(
-    args_defaults = {
-        'micro_batch_size': 1,
-        'num_layers': 1,
-        'hidden_size': 32,
-        'num_attention_heads': 16,
-        'max_position_embeddings': 128,
-        'encoder_seq_length': 32,
-        'use_cpu_initialization': True
-    })
 
 def split_tensor_along_last_dim(tensor, num_partitions,
                                 contiguous_split_chunks=False):
@@ -617,7 +607,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         if ctx.async_grad_allreduce:
             # Asynchronous all-reduce
             handle = torch.distributed.all_reduce(
-                grad_input, group=parallel_state.initialize.get_tensor_model_parallel_group(), async_op=True)
+                grad_input, group=parallel_state.get_tensor_model_parallel_group(), async_op=True)
             # Delay the start of weight gradient computation shortly (3us) to have
             # all-reduce scheduled first and have GPU resources allocated
             _ = torch.empty(1, device=grad_output.device) + 1
@@ -653,7 +643,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
 
         return grad_input, grad_weight, grad_bias, None, None, None
 layers.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
-layers.layers.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
+layers.LinearWithGradAccumulationAndAsyncCommunication = LinearWithGradAccumulationAndAsyncCommunication
 
 def test_column_parallel_linear(tensor_model_parallel_size):
 
@@ -963,9 +953,9 @@ if __name__ == '__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    # initialize_distributed()
+    initialize_distributed()
     world_size = torch.distributed.get_world_size()
-    parallel_state.destroy_model_parallel()
+    # parallel_state.destroy_model_parallel()
 
     print_separator('test initialize affine weight')
     tensor_model_parallel_size = 1
