@@ -19,7 +19,7 @@ import random
 import numpy
 import torch
 
-from megatron.core.tensor_parallel import random as rd
+from megatron import mpu
 
 
 class IdentityLayer(torch.nn.Module):
@@ -36,7 +36,7 @@ def set_random_seed(seed):
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
-    rd.model_parallel_cuda_manual_seed(seed)
+    mpu.model_parallel_cuda_manual_seed(seed)
 
 
 def initialize_distributed(backend='hccl'):
