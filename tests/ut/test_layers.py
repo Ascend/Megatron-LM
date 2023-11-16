@@ -41,7 +41,6 @@ import sys
 import torch.nn as nn
 import math
 import torch.nn.functional as F
-from megatron.initialize import initialize_megatron
 
 
 def split_tensor_along_last_dim(tensor, num_partitions,
