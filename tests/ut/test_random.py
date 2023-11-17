@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+import megatron_npu
 import torch
 if torch.__version__>="1.8.0":
     try:
@@ -22,8 +24,8 @@ if torch.__version__>="1.8.0":
         print('WARNING! torch_npu is not imported.. Please using without npu..')
 from commons import print_separator
 from commons import initialize_distributed
-from megatron import mpu
-import sys
+from megatron.core import parallel_state
+from megatron.core.tensor_parallel import random
 import os
 
 def _set_cuda_rng_state(new_state, device=-1):
@@ -71,8 +73,8 @@ def test_set_cuda_rng_state(tensor_model_parallel_size):
         print('> testing set_rng_state with size {} ...'.
               format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     size = 123
     seed = 1234
@@ -118,7 +120,7 @@ def test_set_cuda_rng_state(tensor_model_parallel_size):
     assert error == 0
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     #torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
@@ -131,8 +133,8 @@ def test_cuda_rng_tracker(tensor_model_parallel_size):
         print('> testing cuda rng tracker with size {} ...'.
               format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     seed_1 = 1234
     seed_2 = 4321
@@ -152,17 +154,17 @@ def test_cuda_rng_tracker(tensor_model_parallel_size):
     # Now if we interleave seed_1 and seed_2,
     # we should still get the same tensors
     torch.npu.manual_seed(seed_1)
-    mpu.get_cuda_rng_tracker().add('test', seed_2)
+    random.get_cuda_rng_tracker().add('test', seed_2)
 
     # torch.randn(size, out=tensor)
     result_11 = torch.bernoulli(tensor, p=0.5)
 
-    with mpu.get_cuda_rng_tracker().fork('test'):
+    with random.get_cuda_rng_tracker().fork('test'):
         result_21 = torch.bernoulli(tensor, p=0.5)
 
     result_12 = torch.bernoulli(tensor, p=0.5)
 
-    with mpu.get_cuda_rng_tracker().fork('test'):
+    with random.get_cuda_rng_tracker().fork('test'):
         result_22 = torch.bernoulli(tensor, p=0.5)
 
     diff = result_11.sub(result_21).abs().max()
@@ -179,10 +181,10 @@ def test_cuda_rng_tracker(tensor_model_parallel_size):
     assert error < 1.0e-6
 
     # Reset the tracker
-    mpu.get_cuda_rng_tracker().reset()
+    random.get_cuda_rng_tracker().reset()
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     #torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
@@ -195,20 +197,20 @@ def test_model_parallel_cuda_manual_seed(tensor_model_parallel_size):
         print('> testing model parallel cuda manual seed with size {} ...'.
               format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
-    mpu.model_parallel_cuda_manual_seed(12345)
+    random.model_parallel_cuda_manual_seed(12345)
     assert torch.npu.initial_seed() == 12345
-    with mpu.get_cuda_rng_tracker().fork():
+    with random.get_cuda_rng_tracker().fork():
         assert torch.npu.initial_seed() == (12345 + 2718 +
-                                             mpu.get_tensor_model_parallel_rank())
+                                             parallel_state.get_tensor_model_parallel_rank())
 
     # Reset the tracker
-    mpu.get_cuda_rng_tracker().reset()
+    random.get_cuda_rng_tracker().reset()
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     #torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
