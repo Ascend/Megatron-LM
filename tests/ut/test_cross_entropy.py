@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import megatron_npu
 import torch
 if torch.__version__>="1.8.0":
     try:
@@ -25,8 +26,8 @@ from commons import set_random_seed
 from commons import IdentityLayer
 from commons import print_separator
 from commons import initialize_distributed
-from megatron.mpu.cross_entropy import vocab_parallel_cross_entropy
-from megatron import mpu
+from megatron.core.tensor_parallel.cross_entropy import vocab_parallel_cross_entropy
+from megatron.core import tensor_parallel, parallel_state
 import torch.nn.functional as F
 import random
 import sys
@@ -53,7 +54,7 @@ def mpu_cross_entropy(batch_size, seq_length, vocab_size,
     identity = IdentityLayer((batch_size, seq_length, vocab_size),
                              scale=logits_scale).npu()
     logits = identity()
-    logits_parallel = mpu.scatter_to_tensor_model_parallel_region(logits)
+    logits_parallel = tensor_parallel.layers.scatter_to_tensor_model_parallel_region(logits)
     target = torch.LongTensor(
         size=(batch_size, seq_length)).random_(0, vocab_size).npu()
     loss = vocab_parallel_cross_entropy(logits_parallel, target).mean()
@@ -67,8 +68,8 @@ def test_cross_entropy(tensor_model_parallel_size):
         print('> testing cross entropy with model parallel size {} ...'.
               format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(tensor_model_parallel_size)
-    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    parallel_state.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = parallel_state.get_tensor_model_parallel_world_size()
 
     batch_size = 13
     seq_length = 17
@@ -95,7 +96,7 @@ def test_cross_entropy(tensor_model_parallel_size):
     assert error < 1.0e-6
 
     # Reset groups
-    mpu.destroy_model_parallel()
+    parallel_state.destroy_model_parallel()
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
