@@ -31,6 +31,7 @@ from . import adaptor_core_cross_entropy
 from . import adaptor_core_layers
 from . import adaptor_model_transformer
 from . import adaptor_arguments
+from . import adaptor_tokenizer_tokenizer
 
 
 def wrapper_type(fn):

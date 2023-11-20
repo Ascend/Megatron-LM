@@ -130,6 +130,8 @@ def _add_training_args(parser):
                        help='input shape order used by Flash attention')
     group.add_argument('--is-x-model', action='store_true',
                        help='Enable imitate x model.')
+    group.add_argument('--vocab-size', type=int, default=None,
+                       help='Vocab size.')
     return parser
 
 
