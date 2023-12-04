@@ -67,12 +67,7 @@ def ParallelMLPForward(self, hidden_states):
         x, gates = x.chunk(2, dim=-1)
         intermediate_parallel = x * F.gelu(gates)
     else:
-        if False:
-            intermediate_parallel = \
-                bias_gelu_impl(intermediate_parallel, bias_parallel)
-        else:
-            intermediate_parallel = \
-                torch.fast_gelu(intermediate_parallel + bias_parallel)
+        intermediate_parallel = F.gelu(bias_parallel + intermediate_parallel)
 
     # [s, b, h]
     output, output_bias = self.dense_4h_to_h(intermediate_parallel)
