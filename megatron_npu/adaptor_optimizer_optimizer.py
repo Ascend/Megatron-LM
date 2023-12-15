@@ -83,8 +83,8 @@ def adamw(params: List[Tensor],
 
         # Perform stepweight decay
         ## param.mul_(1 - lr * weight_decay)
-        bias_correction1 = beta1 ** step
-        bias_correction2 = beta2 ** step
+        bias_correction1 = beta1 ** (step - 1)
+        bias_correction2 = beta2 ** (step - 1)
 
         param.data, exp_avg, exp_avg_sq = torch_npu.npu_apply_adam_w(
                 bias_correction1,
